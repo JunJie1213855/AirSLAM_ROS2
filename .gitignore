@@ -16,4 +16,3 @@ debug/*
 *.so
 */__pycache__/*
 *.pth
-*.onnx
