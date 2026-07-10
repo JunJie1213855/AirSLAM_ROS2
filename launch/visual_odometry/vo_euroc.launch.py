@@ -8,6 +8,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    print(os.path.join(pkg_dir, 'rviz', 'airslam.rviz'))
     pkg_dir = get_package_share_directory('air_slam')
 
     config_path_arg = DeclareLaunchArgument(
@@ -53,7 +54,7 @@ def generate_launch_description():
         package='rviz2',
         executable='rviz2',
         name='rviz',
-        arguments=['-d', os.path.join(pkg_dir, 'rviz', 'vo.rviz')],
+        arguments=['-d', os.path.join(pkg_dir, 'rviz', 'airslam.rviz')],
         output='screen',
         condition=IfCondition(LaunchConfiguration('visualization')),
     )
