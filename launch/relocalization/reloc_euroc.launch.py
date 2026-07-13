@@ -32,7 +32,7 @@ def generate_launch_description():
     )
     voc_path_arg = DeclareLaunchArgument(
         'voc_path',
-        default_value=os.path.join(pkg_dir, 'voc', 'point_voc_L4.bin'),
+        default_value=os.path.join(pkg_dir, 'point_voc_L4.bin'),
     )
     map_root_arg = DeclareLaunchArgument(
         'map_root',

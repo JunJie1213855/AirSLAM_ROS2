@@ -86,8 +86,21 @@ void MapUser::StopVisualization(){
 void MapUser::LoadMap(const std::string& map_root){
   std::string map_v1_path = ConcatenateFolderAndFileName(map_root, "AirSLAM_mapv1.bin");
   std::ifstream ifs(map_v1_path, std::ios::binary);
-  boost::archive::binary_iarchive ia(ifs);
+  std::cout << "[LoadMap] resolved path: " << map_v1_path << std::endl;
+  if(!ifs.is_open()){
+    std::cerr << "[LoadMap] ERROR: cannot open file" << std::endl;
+    throw std::runtime_error("Cannot open map file");
+  }
+  std::cout << "[LoadMap] file opened OK" << std::endl;
+  try{
+    boost::archive::binary_iarchive ia(ifs);
+    std::cout << "[LoadMap] archive created, deserializing..." << std::endl;
   ia >> _map;
+    std::cout << "[LoadMap] deserialization OK" << std::endl;
+  }catch(const std::exception& e){
+    std::cerr << "[LoadMap] deserialization ERROR: " << e.what() << std::endl;
+    throw;
+  }
 
   new_frame_id = _map->_keyframes.rbegin()->first;
   _database = _map->_database;

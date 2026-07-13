@@ -93,12 +93,30 @@ colcon build --packages-select air_slam --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 ### 4. Run
 
+localization and mapping
+
 ```bash
 source ~/rosws/airslame_ws/install/setup.bash
 export LD_LIBRARY_PATH=~/lib/Deploy/TensorRT-10.9.0.34/lib:$LD_LIBRARY_PATH
 
 ros2 launch air_slam vo_euroc.launch.py \
-    dataroot:=/path/to/euroc/V1_01_easy/mav0
+    dataroot:=/path/to/euroc/V1_01_easy/mav0 \
+    saving_dir:=./output
+```
+
+map refinement
+```bash
+ros2 launch air_slam mr_euroc.launch.py \
+map_root:=./output/ \
+voc_path:=src/AirSLAM/voc/point_voc_L4.bin
+```
+
+relocalization
+```bash
+ros2 launch air_slam reloc_euroc.launch.py \
+dataroot:=/home/ros/dataset/Euroc/vicon_room1/V1_02_medium/mav0/cam0/data \
+map_root:=./output/ \
+voc_path:=./src/AirSLAM/voc/point_voc_L4.bin
 ```
 
 ---
