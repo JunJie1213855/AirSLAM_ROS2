@@ -16,6 +16,10 @@
 #include "utils.h"
 #include "imu.h"
 
+// 这些 struct 是建图前的数据描述，不继承 g2o 顶点/边；真正的图对象在优化函数里创建。
+// fixed 表示状态固定；inlier 是观测的内外点标记；id_camera 用于选择相机模型。
+// pixel_sigma 是观测权重相关字段，实际是否采用以及如何换算以各建图函数为准。
+/// 相机位姿输入/输出：R=Rwc，p=twc（相机在世界中的位置），id_camera 索引 camera_list。
 struct Pose3d {
   bool fixed;
   int id_camera;
@@ -36,6 +40,7 @@ struct Pose3d {
 typedef std::map<int, Pose3d, std::less<int>, Eigen::aligned_allocator<std::pair<const int, Pose3d>>> MapOfPoses;
 
 
+/// 世界系三维地图点；fixed 决定在 BA 中是否更新它。
 struct Position3d{
   bool fixed;
   Eigen::Vector3d p;
@@ -52,6 +57,7 @@ struct Position3d{
 typedef std::map<int, Position3d, std::less<int>, Eigen::aligned_allocator<std::pair<const int, Position3d>>> MapOfPoints3d;
 
 
+/// 单目点观测：通过 id_pose/id_point 连接帧与地图点，keypoint=[uL,vL]。
 struct MonoPointConstraint {
   int id_pose;
   int id_point;
@@ -79,6 +85,7 @@ typedef std::shared_ptr<MonoPointConstraint> MonoPointConstraintPtr;
 typedef std::vector<MonoPointConstraintPtr> VectorOfMonoPointConstraints;
 
 
+/// 双目点观测：keypoint=[uL,vL,uR]；inlier 由优化后外点判断更新。
 struct StereoPointConstraint {
   int id_pose;
   int id_point;
@@ -106,6 +113,7 @@ typedef std::shared_ptr<StereoPointConstraint> StereoPointConstraintPtr;
 typedef std::vector<StereoPointConstraintPtr> VectorOfStereoPointConstraints;
 
 
+/// 世界系三维直线（Plucker 表达）；fixed 决定是否更新。
 struct Line3d{
   bool fixed;
   g2o::Line3D line_3d;
@@ -122,6 +130,7 @@ struct Line3d{
 typedef std::map<int, Line3d, std::less<int>, Eigen::aligned_allocator<std::pair<const int, Line3d>>> MapOfLine3d;
 
 
+/// 单目线观测：line_2d=[u1,v1,u2,v2]，连接 id_pose 和 id_line。
 struct MonoLineConstraint {
   int id_pose;
   int id_line;
@@ -149,6 +158,7 @@ typedef std::shared_ptr<MonoLineConstraint> MonoLineConstraintPtr;
 typedef std::vector<MonoLineConstraintPtr> VectorOfMonoLineConstraints;
 
 
+/// 双目线观测：line_2d=[uL1,vL1,uL2,vL2,uR1,vR1,uR2,vR2]。
 struct StereoLineConstraint {
   int id_pose;
   int id_line;
@@ -176,6 +186,7 @@ typedef std::vector<StereoLineConstraintPtr> VectorOfStereoLineConstraints;
 
 
 // for imu
+/// 帧对应的 IMU 世界系速度；容器键与该帧 poses 的键相同。
 struct Velocity{
   bool fixed;
   Eigen::Vector3d velocity;
@@ -192,6 +203,7 @@ struct Velocity{
 typedef std::map<int, Velocity, std::less<int>, Eigen::aligned_allocator<std::pair<const int, Velocity>>> MapOfVelocity;
 
 
+/// 帧对应的 IMU 陀螺仪/加速度计偏置；fixed 控制两个偏置顶点。
 struct Bias{
   bool fixed;
   Eigen::Vector3d gyr_bias;
@@ -210,6 +222,7 @@ struct Bias{
 typedef std::map<int, Bias, std::less<int>, Eigen::aligned_allocator<std::pair<const int, Bias>>> MapOfBias;
 
 
+/// id_pose1→id_pose2 的时间段预积分数据；建图后形成 IMU 边及必要的偏置差分边。
 struct ImuConstraint{
   int id_pose1;
   int id_pose2;
@@ -232,6 +245,7 @@ struct ImuConstraint{
 typedef std::shared_ptr<ImuConstraint> IMUConstraintPtr;
 typedef std::vector<IMUConstraintPtr> VectorOfIMUConstraints;
 
+/// 两帧相对位姿测量 T_c1_c2（相机 2→相机 1），供位姿图优化使用。
 struct RelativePoseConstraint{
   int id_pose1;
   int id_pose2;

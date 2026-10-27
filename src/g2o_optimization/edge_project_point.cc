@@ -25,6 +25,7 @@ void EdgeSE3ProjectPoint::computeError() {
       static_cast<const g2o::VertexPointXYZ *>(_vertices[0]);
   const VertexVIPose *v2 = static_cast<const VertexVIPose *>(_vertices[1]);
   Eigen::Vector2d obs(_measurement);
+  // Pw 先经 Tcw 变换到相机系，再投影；误差方向为“观测减预测”。
   _error = obs - cam_project(v2->estimate().Rcw * v1->estimate() + v2->estimate().tcw);
 }
 
@@ -102,6 +103,7 @@ void EdgeSE3ProjectStereoPoint::computeError() {
       static_cast<const g2o::VertexPointXYZ *>(_vertices[0]);
   const VertexVIPose *v2 = static_cast<const VertexVIPose *>(_vertices[1]);
   Eigen::Vector3d obs(_measurement);
+  // Pw 先经 Tcw 变换到相机系，再投影；误差方向为“观测减预测”。
   _error = obs - cam_project(v2->estimate().Rcw * v1->estimate() + v2->estimate().tcw);
 }
 

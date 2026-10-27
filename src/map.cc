@@ -35,8 +35,8 @@ void Map::InsertKeyframe(FramePtr frame){
 
   // update mappoints
   std::vector<MappointPtr> new_mappoints;
-  std::vector<int>& track_ids = frame->GetAllTrackIds();
-  std::vector<cv::KeyPoint>& keypoints = frame->GetAllKeypoints();
+  std::vector<int>& track_ids = frame->GtAllTrackIds();
+  std::vector<cv::KeyPoint>& keypoints =e frame->GetAllKeypoints();
   std::vector<double>& depth = frame->GetAllDepth();
   std::vector<MappointPtr>& mappoints = frame->GetAllMappoints();
   Eigen::Matrix4d& Twf = frame->GetPose();
@@ -111,6 +111,7 @@ void Map::InsertKeyframe(FramePtr frame){
   if(_keyframes.size() < 2){
     imu_init_frame = frame;
   }else{
+    // 局部 Map BA
     LocalMapOptimization(frame);
     if(!IMUInit() && _camera->UseIMU()){
       InitializeIMU(frame);
@@ -753,6 +754,7 @@ void Map::LocalMapOptimization(FramePtr new_frame){
     }
   }
 
+  // 局部地图优化
   LocalmapOptimization(poses, points, lines, velocities, biases, camera_list, mono_point_constraints, 
       stereo_point_constraints, mono_line_constraints, stereo_line_constraints, imu_constraints, Rwg, _backend_optimization_config);
 

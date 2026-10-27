@@ -24,6 +24,7 @@
 #include "g2o_optimization/edge_project_line.h"
 #include "g2o_optimization/edge_relative_pose.h"
 
+// 这里只组装优化输入。实际 g2o 图的创建、求解和结果回写见下方优化函数。
 void AddFrameVertex(FramePtr frame, MapOfPoses& poses, int id_camera, bool fix_this_frame){
   int frame_id = frame->GetFrameId();
   Eigen::Matrix4d& frame_pose = frame->GetPose();
@@ -76,6 +77,7 @@ void AddFrameVertex(FramePtr frame, MapOfPoses& poses, int id_camera, MapOfVeloc
   }
 }
 
+// 局部地图联合 BA 入口：可变/固定状态由输入容器中的 fixed 字段决定。
 void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lines, 
     MapOfVelocity& velocities, MapOfBias& biases, std::vector<CameraPtr>& camera_list, 
     VectorOfMonoPointConstraints& mono_point_constraints, VectorOfStereoPointConstraints& stereo_point_constraints, 
@@ -96,6 +98,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   // std::cout << "------------------------------------" << std::endl;
 
   // 1. optimizer
+  // 图管理器；setAlgorithm 指定 LM，线性子问题的 Dense/Eigen 求解器由下方选择。
   g2o::SparseOptimizer optimizer;
   auto linear_solver = g2o::make_unique<g2o::LinearSolverEigen<g2o::BlockSolverX::PoseMatrixType>>();
   g2o::OptimizationAlgorithmLevenberg *solver = new g2o::OptimizationAlgorithmLevenberg(
@@ -104,6 +107,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   optimizer.setVerbose(false);
   optimizer.setAlgorithm(solver);
 
+  // 位姿顶点：输入 Rwc/twc 转为 Tcw，并用 Tcb 外参生成对应的 IMU 位姿。
   // 2. frame vertex
   int max_frame_id = 0;
   for(auto& kv : poses){
@@ -120,6 +124,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   } 
   max_frame_id++;
 
+  // 地图点顶点：世界系 XYZ；fixed=true 时只提供定位参考，不更新点坐标。
   // 3. point vertex
   int max_point_id = max_frame_id;
   for(auto& kv : points){
@@ -134,6 +139,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   }
   max_point_id++;
 
+  // 地图线顶点：世界系直线，6 维存储、4 维优化增量。
   // 4. line vertex
   int max_line_id = max_point_id;
   for(auto& kv : lines){
@@ -148,6 +154,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   }
   max_line_id++;
 
+  // 世界系速度顶点；用 ID 偏移避免与位姿、地图点/线顶点冲突。
   // 5. velocity vertex
   int max_velocity_id = max_line_id;
   for(auto& kv : velocities){
@@ -160,6 +167,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   }
   max_velocity_id++;
 
+  // 每帧各建一个陀螺仪偏置和加速度计偏置顶点，连接预积分和偏置差分边。
   // 6. bias vertex
   int max_bias_id = max_velocity_id;
   for(auto& kv : biases){
@@ -178,6 +186,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   }
   max_bias_id++;
 
+  // 常规跟踪/局部 BA 固定重力方向；重力方向的估计在 IMUInitialization 中进行。
   // 7. gravity direction vertex, will be fixed in this function.
   VertexGDirection* gravity_direction_vertex = new VertexGDirection(Rwg);
   gravity_direction_vertex->setId(max_bias_id);
@@ -193,6 +202,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   const double thHuberMonoPoint = sqrt(cfg.mono_point);
   const double thHuberStereoPoint = sqrt(cfg.stereo_point);
 
+  // 2 维点残差：观测 [u,v] 减去地图点的针孔投影；Huber 核减弱大残差影响。
   // 8.1 mono point edges
   for(MonoPointConstraintPtr& mpc : mono_point_constraints){
     EdgeSE3ProjectPoint* e = new EdgeSE3ProjectPoint();
@@ -212,6 +222,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
     mono_edges.push_back(e);
   }
 
+  // 3 维点残差：观测 [uL,vL,uR] 减预测；右目视差为深度提供约束。
   // 8.2 stereo point edges
   for(StereoPointConstraintPtr& spc : stereo_point_constraints){
     EdgeSE3ProjectStereoPoint* e = new EdgeSE3ProjectStereoPoint();
@@ -241,6 +252,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   const double thHuberMonoLine = sqrt(cfg.mono_line);
   const double thHuberStereoLine = sqrt(cfg.stereo_line);
 
+  // 2 维线残差：观测线段两端点到预测图像直线的距离。
   // 9.1 mono line edges
   for(MonoLineConstraintPtr& mlc : mono_line_constraints){
     EdgeSE3ProjectLine* e = new EdgeSE3ProjectLine();
@@ -262,6 +274,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
     mono_line_edges.push_back(e);
   }
 
+  // 4 维线残差：左、右目各两个端点到对应预测直线的距离。
   // 9.2 stereo line edges
   for(StereoLineConstraintPtr& slc : stereo_line_constraints){
     EdgeStereoSE3ProjectLine* e = new EdgeStereoSE3ProjectLine();
@@ -285,6 +298,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
     stereo_line_edges.push_back(e);
   }
 
+  // 预积分边连接 7 个状态顶点；偏置随机游走由下面独立的差分边约束。
   // 10 imu edges
   std::vector<EdgeIMU*> imu_edges; 
   imu_edges.reserve(imu_constraints.size());
@@ -381,6 +395,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
   }
 
   // optimize again without the outliers
+  // 只激活 level=0 的边；level=1 的外点边暂不参与这轮求解。
   optimizer.initializeOptimization(0);
   optimizer.optimize(15);
 
@@ -406,6 +421,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
     stereo_line_constraints[i]->inlier = (e->chi2() <= cfg.stereo_line);
   }
 
+  // 从 g2o 顶点取最终估计写回输入容器；这里尚未调用 Frame::SetPose。
   // recover optimized data
   // keyframes
   for(MapOfPoses::iterator it = poses.begin(); it != poses.end(); ++it){
@@ -443,6 +459,7 @@ void LocalmapOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d&
 
 }
 
+// MapBuilder::FramePoseOptimization 的实际 g2o 求解入口：建图→LM→外点分类→回写。
 int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lines,
     MapOfVelocity& velocities, MapOfBias& biases, std::vector<CameraPtr>& camera_list, 
     VectorOfMonoPointConstraints& mono_point_constraints, VectorOfStereoPointConstraints& stereo_point_constraints, 
@@ -463,6 +480,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   // std::cout << "------------------------------------" << std::endl;
 
   // 1. optimizer
+  // 图管理器；setAlgorithm 指定 LM，线性子问题的 Dense/Eigen 求解器由下方选择。
   g2o::SparseOptimizer optimizer;
   auto linear_solver = g2o::make_unique<g2o::LinearSolverDense<g2o::BlockSolverX::PoseMatrixType>>();
   g2o::OptimizationAlgorithmLevenberg *solver = new g2o::OptimizationAlgorithmLevenberg(
@@ -471,6 +489,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   optimizer.setVerbose(false);
   optimizer.setAlgorithm(solver);
 
+  // 位姿顶点：输入 Rwc/twc 转为 Tcw，并用 Tcb 外参生成对应的 IMU 位姿。
   // 2. frame vertex
   VIPose current_pose;
   VertexVIPose* current_frame;
@@ -495,6 +514,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   } 
   max_frame_id++;
 
+  // 地图点顶点：世界系 XYZ；fixed=true 时只提供定位参考，不更新点坐标。
   // 3. point vertex
   int max_point_id = max_frame_id;
   for(auto& kv : points){
@@ -509,6 +529,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   }
   max_point_id++;
 
+  // 地图线顶点：世界系直线，6 维存储、4 维优化增量。
   // 4. line vertex
   int max_line_id = max_point_id;
   for(auto& kv : lines){
@@ -523,6 +544,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   }
   max_line_id++;
 
+  // 世界系速度顶点；用 ID 偏移避免与位姿、地图点/线顶点冲突。
   // 5. velocity vertex
   VertexVelocity* velocity_vertex_debug;
   int max_velocity_id = max_line_id;
@@ -537,6 +559,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   }
   max_velocity_id++;
 
+  // 每帧各建一个陀螺仪偏置和加速度计偏置顶点，连接预积分和偏置差分边。
   // 6. bias vertex
   int max_bias_id = max_velocity_id;
   for(auto& kv : biases){
@@ -558,6 +581,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   }
   max_bias_id++;
 
+  // 常规跟踪/局部 BA 固定重力方向；重力方向的估计在 IMUInitialization 中进行。
   // 7. gravity direction vertex, will be fixed in this function.
   VertexGDirection* gravity_direction_vertex = new VertexGDirection(Rwg);
   gravity_direction_vertex->setId(max_bias_id);
@@ -572,6 +596,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   const double thHuberMonoPoint = sqrt(cfg.mono_point);
   const double thHuberStereoPoint = sqrt(cfg.stereo_point);
 
+  // 2 维点残差：观测 [u,v] 减去地图点的针孔投影；Huber 核减弱大残差影响。
   // 8.1 mono point edges
   for(MonoPointConstraintPtr& mpc : mono_point_constraints){
     EdgeSE3ProjectPoint* e = new EdgeSE3ProjectPoint();
@@ -591,6 +616,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
     mono_edges.push_back(e);
   }
 
+  // 3 维点残差：观测 [uL,vL,uR] 减预测；右目视差为深度提供约束。
   // 8.2 stereo point edges
   for(StereoPointConstraintPtr& spc : stereo_point_constraints){
     EdgeSE3ProjectStereoPoint* e = new EdgeSE3ProjectStereoPoint();
@@ -620,6 +646,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   const double thHuberMonoLine = sqrt(cfg.mono_line);
   const double thHuberStereoLine = sqrt(cfg.stereo_line);
 
+  // 2 维线残差：观测线段两端点到预测图像直线的距离。
   // 9.1 mono line edges
   for(MonoLineConstraintPtr& mlc : mono_line_constraints){
     EdgeSE3ProjectLine* e = new EdgeSE3ProjectLine();
@@ -641,6 +668,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
     mono_line_edges.push_back(e);
   }
 
+  // 4 维线残差：左、右目各两个端点到对应预测直线的距离。
   // 9.2 stereo line edges
   for(StereoLineConstraintPtr& slc : stereo_line_constraints){
     EdgeStereoSE3ProjectLine* e = new EdgeStereoSE3ProjectLine();
@@ -664,6 +692,7 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
     stereo_line_edges.push_back(e);
   }
 
+  // 预积分边连接 7 个状态顶点；偏置随机游走由下面独立的差分边约束。
   // 10 imu edges
   std::vector<EdgeIMU*> imu_edges; 
   imu_edges.reserve(imu_constraints.size());
@@ -722,12 +751,15 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
     acc_edges.push_back(e_acc);
   }
 
-  // solve
+  // 分轮求解，并在轮间重新判断视觉外点。
+  // 数组虽有 4 项，下面 iter<3，因此最多 3 轮，每轮最多 10 次迭代；边少于 10 条时提前退出。
+  // 每轮重置当前位姿为初值；轮间重新分类视觉外点，影响下一轮参与求解的边。
   const int its[4]={10, 10, 10, 10};  
 
   int num_outlier = 0;
   for(size_t iter = 0; iter < 3; iter++){
     current_frame->setEstimate(current_pose);
+    // 只激活 level=0 的边；level=1 的外点边暂不参与这轮求解。
     optimizer.initializeOptimization(0);
     optimizer.optimize(its[iter]);
   
@@ -869,8 +901,8 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
 
   // }
 
-
-
+  // 恢复数据
+  // 从 g2o 顶点取最终估计写回输入容器；这里尚未调用 Frame::SetPose。
   // recover optimized data
   // keyframes
   for(MapOfPoses::iterator it = poses.begin(); it != poses.end(); ++it){
@@ -897,9 +929,11 @@ int FrameOptimization(MapOfPoses& poses, MapOfPoints3d& points, MapOfLine3d& lin
   return (mono_point_constraints.size() + stereo_point_constraints.size() + mono_line_constraints.size() + stereo_line_constraints.size() - num_outlier);
 }
 
+// IMU 对齐入口：利用已有视觉轨迹估计速度、共享偏置及重力方向。
 bool IMUInitialization(MapOfPoses& poses, MapOfVelocity& velocities, Bias& bias, std::vector<CameraPtr>& camera_list,
     VectorOfIMUConstraints& imu_constraints, Eigen::Matrix3d& Rwg){
   // 1. optimizer
+  // 图管理器；setAlgorithm 指定 LM，线性子问题的 Dense/Eigen 求解器由下方选择。
   g2o::SparseOptimizer optimizer;
   auto linear_solver = g2o::make_unique<g2o::LinearSolverEigen<g2o::BlockSolverX::PoseMatrixType>>();
   g2o::OptimizationAlgorithmLevenberg *solver = new g2o::OptimizationAlgorithmLevenberg(
@@ -908,6 +942,7 @@ bool IMUInitialization(MapOfPoses& poses, MapOfVelocity& velocities, Bias& bias,
   optimizer.setVerbose(false);
   optimizer.setAlgorithm(solver);
 
+  // 将输入 Twc 转成 Tcw，并结合 Tcb 得到 IMU 位姿；setFixed 决定该状态能否更新。
   // frame vertex
   int max_frame_id = 0;
   for(auto& kv : poses){
@@ -987,6 +1022,7 @@ bool IMUInitialization(MapOfPoses& poses, MapOfVelocity& velocities, Bias& bias,
   optimizer.addEdge(e_gyr_prior);
   optimizer.addEdge(e_acc_prior);
 
+  // IMU 边连接 pose_i,v_i,bg,ba,pose_j,v_j,重力方向；另加偏置差分/先验边。
   // imu edges
   std::vector<EdgeIMU*> imu_edges; 
   imu_edges.reserve(imu_constraints.size());
@@ -1428,6 +1464,7 @@ void ValidateIMUInitialization(std::vector<FramePtr>& frames){
   }
 }
 
+// 仅优化帧间相对位姿关系，不建立视觉地图点/线顶点。
 void PoseGraphOptimization(MapOfPoses& poses, std::vector<CameraPtr>& camera_list, 
     VectorOfRelativePoseConstraints& relative_pose_constraints){
   if(poses.empty() || camera_list.empty() || relative_pose_constraints.empty()){
@@ -1435,6 +1472,7 @@ void PoseGraphOptimization(MapOfPoses& poses, std::vector<CameraPtr>& camera_lis
   }
 
   // 1. optimizer
+  // 图管理器；setAlgorithm 指定 LM，线性子问题的 Dense/Eigen 求解器由下方选择。
   g2o::SparseOptimizer optimizer;
   auto linear_solver = g2o::make_unique<g2o::LinearSolverEigen<g2o::BlockSolverX::PoseMatrixType>>();
   g2o::OptimizationAlgorithmLevenberg *solver = new g2o::OptimizationAlgorithmLevenberg(
@@ -1443,6 +1481,7 @@ void PoseGraphOptimization(MapOfPoses& poses, std::vector<CameraPtr>& camera_lis
   optimizer.setVerbose(false);
   optimizer.setAlgorithm(solver);
 
+  // 位姿顶点：输入 Rwc/twc 转为 Tcw，并用 Tcb 外参生成对应的 IMU 位姿。
   // 2. frame vertex
   for(auto& kv : poses){
     Eigen::Matrix4d Tcb = camera_list[kv.second.id_camera]->BodyToCamera();
@@ -1475,6 +1514,7 @@ void PoseGraphOptimization(MapOfPoses& poses, std::vector<CameraPtr>& camera_lis
   optimizer.initializeOptimization();
   optimizer.optimize(20);
 
+  // 从 g2o 顶点取最终估计写回输入容器；这里尚未调用 Frame::SetPose。
   // recover optimized data
   for(MapOfPoses::iterator it = poses.begin(); it != poses.end(); ++it){
     VertexVIPose* frame_vertex = static_cast<VertexVIPose*>(optimizer.vertex(it->first));
@@ -1485,6 +1525,7 @@ void PoseGraphOptimization(MapOfPoses& poses, std::vector<CameraPtr>& camera_lis
   return;
 }
 
+// 全局视觉 BA：在整个 Map 上优化关键帧与地图点/线，并处理观测外点。
 void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rejection, 
     bool line_outlier_rejection, int first_iterations, int second_iterations){
   std::map<int, MappointPtr>& mappoints = _map->GetAllMappoints();
@@ -1493,6 +1534,7 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
   CameraPtr camera = _map->GetCameraPtr();
 
   // 1. optimizer
+  // 图管理器；setAlgorithm 指定 LM，线性子问题的 Dense/Eigen 求解器由下方选择。
   g2o::SparseOptimizer optimizer;
   auto linear_solver = g2o::make_unique<g2o::LinearSolverEigen<g2o::BlockSolverX::PoseMatrixType>>();
   g2o::OptimizationAlgorithmLevenberg *solver = new g2o::OptimizationAlgorithmLevenberg(
@@ -1501,6 +1543,7 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
   optimizer.setVerbose(false);
   optimizer.setAlgorithm(solver);
 
+  // 位姿顶点：输入 Rwc/twc 转为 Tcw，并用 Tcb 外参生成对应的 IMU 位姿。
   // 2. frame vertex
   int max_frame_id = 0;
   Eigen::Matrix4d Tcb = camera->BodyToCamera();
@@ -1526,6 +1569,7 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
   } 
   max_frame_id++;
 
+  // 地图点顶点：世界系 XYZ；fixed=true 时只提供定位参考，不更新点坐标。
   // 3. point vertex
   int max_point_id = max_frame_id;
   for(auto& kv : mappoints){
@@ -1543,6 +1587,7 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
   }
   max_point_id++;
 
+  // 地图线顶点：世界系直线，6 维存储、4 维优化增量。
   // 4. line vertex
   int max_line_id = max_point_id;
   for(auto& kv : maplines){
@@ -1568,7 +1613,8 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
       bool fix_this_frame = (kv.first == keyframes.begin()->first);
       FramePtr frame = kv.second;
 
-      // 5. velocity vertex
+      // 世界系速度顶点；用 ID 偏移避免与位姿、地图点/线顶点冲突。
+  // 5. velocity vertex
       assert(frame->VelocityIsInitialized());
       VertexVelocity* velocity_vertex = new VertexVelocity(frame->GetVelocity());
       int velocity_id = kv.first * 3 + max_line_id;
@@ -1576,7 +1622,8 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
       velocity_vertex->setFixed(fix_this_frame);
       optimizer.addVertex(velocity_vertex);
 
-      // 6. bias vertex
+      // 每帧各建一个陀螺仪偏置和加速度计偏置顶点，连接预积分和偏置差分边。
+  // 6. bias vertex
       Eigen::Vector3d gyr_bias, acc_bias;
       PreinterationPtr preinteration = frame->GetIMUPreinteration();
       if(fix_this_frame){
@@ -1600,7 +1647,8 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
       optimizer.addVertex(acc_bias_vertex);
     }
 
-    // 7. gravity direction vertex, will be fixed in this function.
+    // 常规跟踪/局部 BA 固定重力方向；重力方向的估计在 IMUInitialization 中进行。
+  // 7. gravity direction vertex, will be fixed in this function.
     gravity_direction_id = max_bias_id + 1;
     VertexGDirection* gravity_direction_vertex = new VertexGDirection(Rwg);
     gravity_direction_vertex->setId(gravity_direction_id);
@@ -1835,6 +1883,7 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
 
   if(second_iterations > 0){
     // optimize again without the outliers
+    // 只激活 level=0 的边；level=1 的外点边暂不参与这轮求解。
     optimizer.initializeOptimization(0);
     optimizer.optimize(second_iterations);
 
@@ -1897,6 +1946,7 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
     _map->RemoveLineOutliers(mapline_outliers);
   }
 
+  // 全局 BA 直接写回 Map 中的关键帧及地图几何数据。
   // recover optimized data
   // keyframes
   for(auto& kv : keyframes){
@@ -1943,6 +1993,7 @@ void GlobalBA(MapPtr _map, const OptimizationConfig& cfg, bool point_outlier_rej
     }
   }
 
+  // 地图线顶点：世界系直线，6 维存储、4 维优化增量。
   // 4. line vertex
   for(auto& kv : maplines){
     MaplinePtr mpl = kv.second;

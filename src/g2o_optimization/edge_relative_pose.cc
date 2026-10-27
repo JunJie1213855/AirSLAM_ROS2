@@ -8,6 +8,7 @@
 #include "g2o_optimization/vertex_vi_pose.h"
 #include "g2o_optimization/edge_relative_pose.h"
 
+// 下方实际是相对位姿约束的构造函数，用于位姿图优化。
 // monocular point
 EdgeRelativePose::EdgeRelativePose()
     : g2o::BaseBinaryEdge<6, Vector6d, VertexVIPose, VertexVIPose>() {

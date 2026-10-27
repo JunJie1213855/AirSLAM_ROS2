@@ -123,6 +123,7 @@ GDirection::GDirection(const Eigen::Matrix3d& Rwg_) : Rwg(Rwg_){
 
 void GDirection::Update(const double *update_){
   Eigen::Vector3d update;
+  // 只允许两个倾斜方向的增量，不额外引入绕重力轴的航向自由度。
   update << update_[0], update_[1], 0.0;
   Eigen::Matrix3d dR;
   SO3Exp(update, dR);

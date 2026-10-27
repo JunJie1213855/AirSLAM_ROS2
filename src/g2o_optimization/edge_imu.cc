@@ -13,6 +13,7 @@ EdgeIMU::EdgeIMU(PreinterationPtr preinteration_): preinteration(preinteration_)
   resize(7);
   g << 0, 0, -Camera::IMU_G_VALUE;
 
+  // 协方差的逆给出残差权重；对称化并截去负/极小特征值，抑制数值误差。
   Matrix9d info = preinteration->Cov.block<9,9>(0,0).cast<double>().inverse();
   info = (info + info.transpose()) / 2;
   Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double,9,9> > es(info);
@@ -35,6 +36,7 @@ void EdgeIMU::computeError() {
   const VertexVelocity* vv2= static_cast<const VertexVelocity*>(_vertices[5]);
   const VertexGDirection* vg = static_cast<const VertexGDirection*>(_vertices[6]);
 
+  // 用连接的偏置顶点修正预积分，不需要在每次残差计算时重新积分原始 IMU。
   const Eigen::Vector3d gyr_bias = vg2->estimate();
   const Eigen::Vector3d acc_bias = va2->estimate();
   const Eigen::Matrix3d dR = preinteration->GetDeltaRotation(gyr_bias);
@@ -49,6 +51,7 @@ void EdgeIMU::computeError() {
   Eigen::Vector3d ev = vp1->estimate().Rwb.transpose() * (vv2->estimate() - vv1->estimate() - gw*dt) - dV;
   Eigen::Vector3d ep = vp1->estimate().Rwb.transpose() * (vp2->estimate().twb - vp1->estimate().twb - vv1->estimate()*dt - gw*dt*dt/2) - dP;
 
+  // 残差按 [旋转,速度,位置] 拼接，必须与预积分协方差的排列一致。
   _error << er, ev, ep;
 
   // std::cout << "---------------------------- EdgeIMU::computeError ------------------------------------" << std::endl;

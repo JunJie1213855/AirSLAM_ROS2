@@ -70,6 +70,8 @@ void VIPose::Update(const double* v){
   Eigen::Matrix3d dR;
   SO3Exp(dr, dR);
 
+  // dt 在更新前的 IMU 局部坐标系表达，先转到世界系再累加位置。
+  // dr 为右乘旋转增量；更新 Twb 后由固定外参重新计算 Tcw。
   twb += Rwb * dt;
   Rwb = Rwb * dR;
 

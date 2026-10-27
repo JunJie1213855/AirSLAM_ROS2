@@ -31,6 +31,7 @@ void EdgeSE3ProjectLine::computeError() {
   Eigen::Vector2d error;
   error(0) = obs(0) * line_2d(0) + obs(1) * line_2d(1) + line_2d(2);
   error(1) = obs(2) * line_2d(0) + obs(3) * line_2d(1) + line_2d(2);
+  // 除以 sqrt(a^2+b^2)，把齐次直线代数误差变为像素距离。
   _error = error / line_2d_norm;
 }
 
@@ -72,6 +73,7 @@ void EdgeStereoSE3ProjectLine::computeError() {
   error(1) = (obs(2) * line_2d_left(0) + obs(3) * line_2d_left(1) + line_2d_left(2)) / line_2d_norm_left;
 
   g2o::Isometry3 T_right(T_left);
+  // 水平校正双目：由左相机到右相机的变换在 x 方向平移 -b。
   T_right(0, 3) -= b;
 
   Eigen::Vector3d line_2d_right = cam_project(T_right * v2->estimate());
