@@ -28,7 +28,7 @@ bool SuperGlue::build() {
         return false;
     }
 
-    const auto explicit_batch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+    const auto explicit_batch = networkCreationFlags();
     auto network = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(explicit_batch));
     if (!network) {
         return false;
@@ -96,7 +96,7 @@ bool SuperGlue::build() {
         return false;
     }
 
-    engine_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(plan->data(), plan->size()));
+    engine_ = deserializeEngine(runtime.release(), plan->data(), plan->size());
     if (!engine_) {
         return false;
     }
@@ -129,7 +129,7 @@ bool SuperGlue::construct_network(TensorRTUniquePtr<nvinfer1::IBuilder> &builder
         return false;
     }
     // config->setMaxWorkspaceSize(512_MiB);
-    config->setFlag(nvinfer1::BuilderFlag::kFP16);
+    configureModelPrecision(*config);
     enableDLA(builder.get(), config.get(), superglue_config_.dla_core);
     return true;
 }
@@ -182,7 +182,7 @@ bool SuperGlue::infer(const Eigen::Matrix<float, 259, Eigen::Dynamic> &features0
 
     buffers.copyInputToDevice();
 
-    bool status = context_->executeV2(buffers.getDeviceBindings().data());
+    bool status = buffers.execute(*context_);
     if (!status) {
         return false;
     }
@@ -473,7 +473,7 @@ bool SuperGlue::process_output(const BufferManager &buffers,
 void SuperGlue::save_engine() {
     if (superglue_config_.engine_file.empty()) return;
     if (engine_ != nullptr) {
-        nvinfer1::IHostMemory *data = engine_->serialize();
+        TensorRTUniquePtr<nvinfer1::IHostMemory> data{engine_->serialize()};
         std::ofstream file(superglue_config_.engine_file, std::ios::binary);;
         if (!file) return;
         file.write(reinterpret_cast<const char *>(data->data()), data->size());
@@ -495,7 +495,7 @@ bool SuperGlue::deserialize_engine() {
             delete[] model_stream;
             return false;
         }
-        engine_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(model_stream, size));
+        engine_ = deserializeEngine(runtime, model_stream, size);
         delete[] model_stream;
         if (engine_ == nullptr) return false;
         return true;

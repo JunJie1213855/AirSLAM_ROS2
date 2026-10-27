@@ -1158,12 +1158,11 @@ bool Map::InitializeIMU(FramePtr frame){
 
   // 2. Delete keyframes before imu_init_frame and related mappoints
   int init_frame_id = imu_init_frame->GetFrameId();
-  for(auto& kv : _keyframes){
-    FramePtr kf = kv.second;
-    if(kf->GetFrameId() < init_frame_id){
-      DeleteKeyframe(kf);
-    }
+  std::vector<FramePtr> obsolete_keyframes;
+  for (const auto& kv : _keyframes) {
+    if (kv.second->GetFrameId() < init_frame_id) obsolete_keyframes.push_back(kv.second);
   }
+  for (const auto& obsolete : obsolete_keyframes) DeleteKeyframe(obsolete);
 
   // 3. Rotate all keyframes, mappoints and maplines into new coordinate
   Eigen::Matrix4d Tgw = Eigen::Matrix4d::Identity();
@@ -1190,6 +1189,12 @@ bool Map::InitializeIMU(FramePtr frame){
     if(mpl->IsValid()){
       g2o::Line3D line_3d = mpl->GetLine3D();
       mpl->SetLine3D((Tgw_line*line_3d));
+      if (mpl->EndpointsValid()) {
+        Vector6d endpoints = mpl->GetEndpoints();
+        endpoints.head<3>() = Rgw * endpoints.head<3>() + tgw;
+        endpoints.tail<3>() = Rgw * endpoints.tail<3>() + tgw;
+        mpl->SetEndpoints(endpoints, false);
+      }
     }
   }
 
@@ -1199,6 +1204,9 @@ bool Map::InitializeIMU(FramePtr frame){
 
   SetRwg(Eigen::Matrix3d::Identity());
   SetIMUInit(true);
+  _ros_publisher->SetReady(true, static_cast<int64_t>(frame->GetTimestamp() * 1e9));
+  // Publish only after the world-frame rotation/translation has completed.
+  Publish(frame->GetTimestamp());
   // std::cout << "-------------------After rotating----------------------" << std::endl;
   // ValidateIMUInitialization(frame_list);
   Eigen::Vector3d gn;
@@ -1281,7 +1289,12 @@ void Map::SetRosPublisher(RosPublisherPtr ros_publisher){
   _ros_publisher = ros_publisher;
 }
 
+bool Map::ReadyToPublish() const {
+  return _camera && (!_camera->UseIMU() || _imu_init);
+}
+
 void Map::Publish(double time, bool clear_old_message){
+  if (!ReadyToPublish()) return;
   KeyframeMessagePtr keyframe_message = std::shared_ptr<KeyframeMessage>(new KeyframeMessage);
   MapMessagePtr map_message = std::shared_ptr<MapMessage>(new MapMessage);
   MapLineMessagePtr mapline_message = std::shared_ptr<MapLineMessage>(new MapLineMessage);

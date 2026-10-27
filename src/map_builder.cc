@@ -1,9 +1,9 @@
 #include "map_builder.h"
 
 #include <assert.h>
-#include <iostream> 
-#include <Eigen/Core> 
-#include <Eigen/Geometry> 
+#include <iostream>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <opencv2/core/eigen.hpp>
 #include <boost/serialization/serialization.hpp>
 #include <boost/archive/text_oarchive.hpp>
@@ -29,6 +29,8 @@ MapBuilder::MapBuilder(VisualOdometryConfigs& configs, rclcpp::Node::SharedPtr n
   _feature_detector = std::shared_ptr<FeatureDetector>(new FeatureDetector(configs.plnet_config));
   _ros_publisher = std::shared_ptr<RosPublisher>(new RosPublisher(configs.ros_publisher_config, node));
   _map = std::shared_ptr<Map>(new Map(_configs.backend_optimization_config, _camera, _ros_publisher));
+
+  if (!_camera->UseIMU()) _ros_publisher->SetReady(true);
 
   _feature_thread = std::thread([this](){ ExtractFeatureThread(); });
   _tracking_thread = std::thread([this](){ TrackingThread(); });
@@ -75,7 +77,7 @@ void MapBuilder::ExtractFeatureThread(){
     // construct frame
     FramePtr frame = std::shared_ptr<Frame>(new Frame(frame_id, false, _camera, timestamp));
 
-    Eigen::Matrix<float, 259, Eigen::Dynamic> left_features, right_features; 
+    Eigen::Matrix<float, 259, Eigen::Dynamic> left_features, right_features;
     std::vector<Eigen::Vector4d> left_lines, right_lines;
     std::vector<cv::DMatch> matches, stereo_matches;
     int good_stereo_point = 0;
@@ -147,15 +149,15 @@ void MapBuilder::ExtractFeatureThread(){
     _tracking_mutex.lock();
     _tracking_data_buffer.push(tracking_data);
     _tracking_mutex.unlock();
-  }  
+  }
 
   _stop_mutex.lock();
   _feature_thread_stop = true;
   _stop_mutex.unlock();
 }
 
-void MapBuilder::TrackingThread(){ 
-  while(!_shutdown || !_data_buffer.empty() || !_tracking_data_buffer.empty()){
+void MapBuilder::TrackingThread(){
+  while(!_shutdown || !_feature_thread_stop || !_tracking_data_buffer.empty()){
     if(_tracking_data_buffer.empty()){
       usleep(2000);
       continue;
@@ -208,7 +210,7 @@ void MapBuilder::TrackingThread(){
 
     frame->SetPreviousFrame(ref_keyframe);
 
-    if(track_inliers > _configs.keyframe_config.lost_num_match){ 
+    if(track_inliers > _configs.keyframe_config.lost_num_match){
       _last_tracked_frame = frame;
     }
 
@@ -220,7 +222,7 @@ void MapBuilder::TrackingThread(){
     }
 
     PublishFrame(frame, image_left_rect, frame_type, matches);
-  }  
+  }
 
   _stop_mutex.lock();
   _tracking_trhead_stop = true;
@@ -282,7 +284,7 @@ int MapBuilder::TrackFrame(FramePtr ref_frame, FramePtr current_frame, std::vect
   return num_inliers;
 }
 
-int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vector<MappointPtr>& mappoints, 
+int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vector<MappointPtr>& mappoints,
     std::vector<int>& inliers, Preinteration& preinteration){
 
   // get initial pose
@@ -290,7 +292,7 @@ int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vec
   Eigen::Matrix4d Twc = Eigen::Matrix4d::Identity();
   Eigen::Vector3d vwb = Eigen::Vector3d::Zero();
   int frame_id1 = frame1->GetFrameId();
-  
+
   bool predict_by_pnp = true;
   if(imu_init && preinteration.Valid() && preinteration.dT < 2.0){
     Eigen::Matrix4d Twb1;
@@ -339,7 +341,7 @@ int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vec
     AddFrameVertex(frame1, poses, 0, velocities, biases, imu_constraints, false, false);
 
     // imu constraint
-    IMUConstraintPtr imu_constraint = std::shared_ptr<ImuConstraint>(new ImuConstraint()); 
+    IMUConstraintPtr imu_constraint = std::shared_ptr<ImuConstraint>(new ImuConstraint());
     imu_constraint->id_pose1 = frame0->GetFrameId();
     imu_constraint->id_pose2 = frame1->GetFrameId();;
     imu_constraint->id_camera1 = 0;
@@ -357,7 +359,7 @@ int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vec
     // points
     MappointPtr mpt = mappoints[i];
     if(mpt == nullptr || !mpt->IsValid()) continue;
-    Eigen::Vector3d keypoint; 
+    Eigen::Vector3d keypoint;
     if(!frame1->GetKeypointPosition(i, keypoint)) continue;
 
     int mpt_id = mpt->GetId();
@@ -368,7 +370,7 @@ int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vec
 
     // visual constraint
     if(keypoint(2) > 0){
-      StereoPointConstraintPtr stereo_constraint = std::shared_ptr<StereoPointConstraint>(new StereoPointConstraint()); 
+      StereoPointConstraintPtr stereo_constraint = std::shared_ptr<StereoPointConstraint>(new StereoPointConstraint());
       stereo_constraint->id_pose = frame_id1;
       stereo_constraint->id_point = mpt_id;
       stereo_constraint->id_camera = 0;
@@ -378,7 +380,7 @@ int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vec
       stereo_point_constraints.push_back(stereo_constraint);
       stereo_indexes.push_back(i);
     }else{
-      MonoPointConstraintPtr mono_constraint = std::shared_ptr<MonoPointConstraint>(new MonoPointConstraint()); 
+      MonoPointConstraintPtr mono_constraint = std::shared_ptr<MonoPointConstraint>(new MonoPointConstraint());
       mono_constraint->id_pose = frame_id1;
       mono_constraint->id_point = mpt_id;
       mono_constraint->id_camera = 0;
@@ -390,7 +392,7 @@ int MapBuilder::FramePoseOptimization(FramePtr frame0, FramePtr frame1, std::vec
     }
   }
 
-  int num_inliers = FrameOptimization(poses, points, lines, velocities, biases, camera_list, 
+  int num_inliers = FrameOptimization(poses, points, lines, velocities, biases, camera_list,
     mono_point_constraints, stereo_point_constraints, mono_line_constraints, stereo_line_constraints,
     imu_constraints, Rwg, _configs.tracking_optimization_config);
 
@@ -457,7 +459,7 @@ int MapBuilder::AddKeyframeCheck(FramePtr ref_keyframe, FramePtr current_frame, 
   Eigen::Matrix2Xf parallax = ref_keypoints - current_keypoints;
   double average_parallax = (double)((parallax * parallax.transpose()).sum()) / match_num;
   double image_size = _camera->ImageHeight() * _camera->ImageWidth();
-  
+
   if(average_parallax > image_size * ration_thr * ration_thr){
     return 1;
   }
@@ -483,7 +485,7 @@ void MapBuilder::InsertKeyframe(FramePtr frame){
   }
 
   // insert keyframe to map
-  _map->InsertKeyframe(frame); 
+  _map->InsertKeyframe(frame);
 
   _track_id = _map->UpdateFrameTrackIds(_track_id);
   _line_track_id = _map->UpdateFrameLineTrackIds(_line_track_id);
@@ -512,31 +514,50 @@ void MapBuilder::PublishFrame(FramePtr frame, cv::Mat& image, FrameType frame_ty
     key_image_pub = DrawFeatures(image, keypoints, lines, false);
     key_image_id_pub = 1;
     keyframe_keypoints_pub = frame->GetAllKeypoints();
+    auto initial_pose = std::make_shared<FramePoseMessage>();
+    initial_pose->time = timestamp;
+    initial_pose->pose = pose;
+    if (_map->ReadyToPublish()) {
+      _output_started = true;
+      _ros_publisher->PublishFramePose(initial_pose);
+    }
     return;
-  } 
+  }
 
-  FeatureMessgaePtr feature_message = std::shared_ptr<FeatureMessgae>(new FeatureMessgae);
-  FramePoseMessagePtr frame_pose_message = std::shared_ptr<FramePoseMessage>(new FramePoseMessage);
+  // Maintain the reference-image cache during bootstrap, but expose no
+  // provisional camera pose or debug image before gravity alignment.
+  if (_map->ReadyToPublish()) {
+    const bool first_output = !_output_started;
+    if (first_output) {
+      _output_started = true;
+      // Do not expose a pre-initialization reference image in the debug mosaic.
+      key_image_pub = DrawFeatures(image, keypoints, lines, false);
+      keyframe_keypoints_pub = keypoints;
+      key_image_id_pub = frame->GetFrameId();
+    }
+    FeatureMessgaePtr feature_message = std::shared_ptr<FeatureMessgae>(new FeatureMessgae);
+    FramePoseMessagePtr frame_pose_message = std::shared_ptr<FramePoseMessage>(new FramePoseMessage);
 
-  feature_message->time = timestamp;
-  feature_message->image = image;
-  feature_message->key_image = key_image_pub;
-  feature_message->frame_id = frame->GetFrameId();
-  feature_message->keyfrmae_id = key_image_id_pub;
-  feature_message->keypoints = keypoints;
-  feature_message->keyframe_keypoints = keyframe_keypoints_pub;
-  feature_message->matches = matches;
-  feature_message->fm_type = FeatureMessgaeType::VOFeature;
-  // feature_message->lines = lines;
-  // feature_message->points_on_lines = points_on_lines;
-  feature_message->inliers = inliers_feature_message;
-  
-  frame_pose_message->time = timestamp;
-  frame_pose_message->pose = pose;
-  // feature_message->line_track_ids = line_track_ids;
+    feature_message->time = timestamp;
+    feature_message->image = image;
+    feature_message->key_image = key_image_pub;
+    feature_message->frame_id = frame->GetFrameId();
+    feature_message->keyfrmae_id = key_image_id_pub;
+    feature_message->keypoints = keypoints;
+    feature_message->keyframe_keypoints = keyframe_keypoints_pub;
+    if (!first_output) feature_message->matches = matches;
+    feature_message->fm_type = FeatureMessgaeType::VOFeature;
+    feature_message->lines = lines;
+    // feature_message->points_on_lines = points_on_lines;
+    feature_message->inliers = inliers_feature_message;
 
-  _ros_publisher->PublishFeature(feature_message);
-  _ros_publisher->PublishFramePose(frame_pose_message);
+    frame_pose_message->time = timestamp;
+    frame_pose_message->pose = pose;
+    // feature_message->line_track_ids = line_track_ids;
+
+    _ros_publisher->PublishFeature(feature_message);
+    _ros_publisher->PublishFramePose(frame_pose_message);
+  }
 
   if(frame_type==KeyFrame){
     std::vector<bool> inliers(keypoints.size(), true);
@@ -575,9 +596,9 @@ void MapBuilder::Stop(){
   _stop_mutex.lock();
   _shutdown = true;
   _stop_mutex.unlock();
-  _ros_publisher->ShutDown();
   _feature_thread.join();
   _tracking_thread.join();
+  _ros_publisher->ShutDown();
 }
 
 bool MapBuilder::IsStopped(){

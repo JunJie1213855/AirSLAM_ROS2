@@ -6,6 +6,10 @@
 
 RosPublisher::RosPublisher(const RosPublisherConfig& ros_publisher_config, rclcpp::Node::SharedPtr node): _node(node), _config(ros_publisher_config){
 
+  _ready_pub = _node->create_publisher<std_msgs::msg::Bool>(
+      "/AirSLAM/ready", rclcpp::QoS(1).reliable().transient_local());
+  SetReady(false);
+
   _tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(_node);
 
   if(_config.feature){
@@ -60,6 +64,7 @@ RosPublisher::RosPublisher(const RosPublisherConfig& ros_publisher_config, rclcp
       nav_msgs::msg::Odometry odometry;
       odometry.header.stamp = rclcpp::Time(static_cast<int64_t>(frame_pose_message->time * 1e9));
       odometry.header.frame_id = "map";
+      odometry.child_frame_id = "camera";
       odometry.pose.pose.position.x = frame_pose_message->pose(0, 3);
       odometry.pose.pose.position.y = frame_pose_message->pose(1, 3);
       odometry.pose.pose.position.z = frame_pose_message->pose(2, 3);
@@ -370,6 +375,16 @@ void RosPublisher::PubRelocResults(RelocMessagePtr reloc_message){
   _reloc_traj_publisher.Publish(reloc_message);
   _reloc_pose_publisher.Publish(reloc_message);
   _reloc_mpts_publisher.Publish(reloc_message);
+}
+
+void RosPublisher::SetReady(bool ready, int64_t stamp_ns) {
+  std_msgs::msg::Bool message;
+  message.data = ready;
+  _ready_pub->publish(message);
+  if (ready) {
+    RCLCPP_INFO(_node->get_logger(), "AirSLAM output ready: stamp_ns=%lld",
+                static_cast<long long>(stamp_ns));
+  }
 }
 
 void RosPublisher::Clear(){

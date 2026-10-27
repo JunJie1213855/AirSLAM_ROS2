@@ -1,13 +1,18 @@
 cmake_minimum_required(VERSION 3.5)
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+
 project(air_slam)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_BUILD_TYPE Release)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+set(OpenGL_GL_PREFERENCE GLVND)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 add_compile_options(-w)
 
-add_subdirectory(${PROJECT_SOURCE_DIR}/3rdparty/tensorrtbuffer)
-add_subdirectory(${PROJECT_SOURCE_DIR}/3rdparty/DBoW2)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -18,9 +23,14 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(message_filters REQUIRED)
+find_package(std_srvs REQUIRED)
 
 find_package(OpenCV 4.2 REQUIRED)
 find_package(Eigen3 REQUIRED)
+if(CUDA_ROOT)
+  set(CUDA_TOOLKIT_ROOT_DIR "${CUDA_ROOT}" CACHE PATH "CUDA toolkit root" FORCE)
+endif()
 find_package(CUDA REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
@@ -31,12 +41,19 @@ find_package(g2o REQUIRED)
 find_package(Gflags REQUIRED)
 find_package(Glog REQUIRED)
 
-# TensorRT 10.9.0.34 — manual path (no cmake config provided)
-set(TENSORRT_DIR $ENV{HOME}/lib/Deploy/TensorRT-10.9.0.34)
-set(TENSORRT_INCLUDE_DIRS ${TENSORRT_DIR}/include)
-set(TENSORRT_LIB_DIRS ${TENSORRT_DIR}/lib)
-find_library(TENSORRT_LIBRARY_INFER nvinfer HINTS ${TENSORRT_LIB_DIRS} REQUIRED)
-find_library(TENSORRT_LIBRARY_ONNX nvonnxparser HINTS ${TENSORRT_LIB_DIRS} REQUIRED)
+# Share one SDK across AirSLAM and its buffer library.
+set(TensorRT_ROOT "$ENV{TensorRT_ROOT}" CACHE PATH "TensorRT SDK root")
+if(NOT TensorRT_ROOT)
+  set(TensorRT_ROOT "$ENV{HOME}/lib/TensorRT-11.3.0.99")
+endif()
+find_path(TENSORRT_INCLUDE_DIRS NvInfer.h HINTS "${TensorRT_ROOT}/include" REQUIRED NO_DEFAULT_PATH)
+find_library(TENSORRT_LIBRARY_INFER nvinfer HINTS "${TensorRT_ROOT}/lib" "${TensorRT_ROOT}/lib64" REQUIRED NO_DEFAULT_PATH)
+find_library(TENSORRT_LIBRARY_ONNX nvonnxparser HINTS "${TensorRT_ROOT}/lib" "${TensorRT_ROOT}/lib64" REQUIRED NO_DEFAULT_PATH)
+get_filename_component(TENSORRT_LIB_DIRS "${TENSORRT_LIBRARY_INFER}" DIRECTORY)
+set(CMAKE_INSTALL_RPATH "${TENSORRT_LIB_DIRS};${CUDA_TOOLKIT_ROOT_DIR}/lib64")
+message(STATUS "AirSLAM TensorRT SDK: ${TensorRT_ROOT}")
+add_subdirectory(${PROJECT_SOURCE_DIR}/3rdparty/tensorrtbuffer)
+add_subdirectory(${PROJECT_SOURCE_DIR}/3rdparty/DBoW2)
 
 add_library(${PROJECT_NAME}_lib SHARED
   src/g2o_optimization/vertex_line3d.cc
@@ -51,6 +68,7 @@ add_library(${PROJECT_NAME}_lib SHARED
   src/bow/database.cc
   src/super_point.cpp
   src/feature_detector.cc
+  src/feature_selection.cc
   src/super_glue.cpp
   src/light_glue.cpp
   src/plnet.cpp
@@ -126,6 +144,10 @@ ament_export_dependencies(
   tf2_ros
 )
 
+add_executable(stereo_inertial_node demo/stereo_inertial_node.cpp)
+target_link_libraries(stereo_inertial_node ${PROJECT_NAME}_lib)
+ament_target_dependencies(stereo_inertial_node message_filters std_srvs)
+
 add_executable(visual_odometry demo/visual_odometry.cpp)
 target_link_libraries(visual_odometry ${PROJECT_NAME}_lib curl)
 
@@ -144,7 +166,7 @@ install(TARGETS ${PROJECT_NAME}_lib tensorrtbuffer DBoW2
   RUNTIME DESTINATION bin
 )
 
-install(TARGETS visual_odometry map_refinement relocalization test_feature
+install(TARGETS visual_odometry stereo_inertial_node map_refinement relocalization test_feature
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -155,5 +177,16 @@ install(DIRECTORY include/
 install(DIRECTORY configs/ DESTINATION share/${PROJECT_NAME}/configs)
 install(DIRECTORY rviz/ voc/ launch/ DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY output/ DESTINATION share/${PROJECT_NAME}/output)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_thread_publisher test/thread_publisher_test.cpp)
+  target_include_directories(test_thread_publisher PRIVATE include)
+  target_link_libraries(test_thread_publisher pthread)
+  ament_add_gtest(test_feature_selection test/feature_selection_test.cpp)
+  target_link_libraries(test_feature_selection ${PROJECT_NAME}_lib)
+  ament_add_gtest(test_imu_preintegration test/imu_preintegration_test.cpp)
+  target_link_libraries(test_imu_preintegration ${PROJECT_NAME}_lib)
+endif()
 
 ament_package()

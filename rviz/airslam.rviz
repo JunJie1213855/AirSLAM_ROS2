@@ -30,7 +30,7 @@ Visualization Manager:
         Value: true
       Axis: Z
       Channel Name: intensity
-      Class: rviz_default_plugins/PointCloud2
+      Class: rviz_default_plugins/PointCloud
       Color: 255; 255; 255
       Color Transformer: AxisColor
       Decay Time: 0

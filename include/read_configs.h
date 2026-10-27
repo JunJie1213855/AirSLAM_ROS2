@@ -2,6 +2,7 @@
 #define READ_CONFIGS_H_
 
 #include <iostream>
+#include <stdexcept>
 #include <yaml-cpp/yaml.h>
 
 #include "utils.h"
@@ -17,6 +18,8 @@ struct PLNetConfig{
 
   int use_superpoint;
 
+  bool use_mask_uniformity = true;
+  int min_distance = 15;
   int max_keypoints;
   float keypoint_threshold;
   int remove_borders;
@@ -28,6 +31,10 @@ struct PLNetConfig{
   void Load(const YAML::Node& plnet_node){
     use_superpoint = plnet_node["use_superpoint"].as<int>();
 
+    use_mask_uniformity = plnet_node["use_mask_uniformity"].as<bool>(true);
+    min_distance = plnet_node["min_distance"].as<int>(15);
+    if (use_mask_uniformity && min_distance <= 0)
+      throw std::invalid_argument("plnet.min_distance must be positive");
     max_keypoints = plnet_node["max_keypoints"].as<int>();
     keypoint_threshold = plnet_node["keypoint_threshold"].as<float>();
     remove_borders = plnet_node["remove_borders"].as<int>();
@@ -54,6 +61,10 @@ struct PLNetConfig{
 struct SuperPointConfig {
   SuperPointConfig() {}
   void Load(const YAML::Node& superpoint_node){
+    use_mask_uniformity = superpoint_node["use_mask_uniformity"].as<bool>(true);
+    min_distance = superpoint_node["min_distance"].as<int>(15);
+    if (use_mask_uniformity && min_distance <= 0)
+      throw std::invalid_argument("superpoint.min_distance must be positive");
     max_keypoints = superpoint_node["max_keypoints"].as<int>();
     keypoint_threshold = superpoint_node["keypoint_threshold"].as<float>();
     remove_borders = superpoint_node["remove_borders"].as<int>();
@@ -72,6 +83,8 @@ struct SuperPointConfig {
     engine_file= superpoint_node["engine_file"].as<std::string>();
   }
 
+  bool use_mask_uniformity = true;
+  int min_distance = 15;
   int max_keypoints;
   float keypoint_threshold;
   int remove_borders;

@@ -1,112 +1,64 @@
 #ifndef THREAD_PUBLISHER_H_
 #define THREAD_PUBLISHER_H_
-
-#include <string>
-#include <thread>
-#include <mutex>
 #include <condition_variable>
-#include <vector>
-#include <queue>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <vector>
 
 template <class T>
-class ThreadPublisher{
+class ThreadPublisher {
 public:
-  ThreadPublisher(){ 
-    shutdown_requested = false;
-    stopped = false;
+  ~ThreadPublisher() { ShutDown(); }
+
+  void Register(std::function<void(const std::shared_ptr<const T>&)> callback) {
+    callbacks_.push_back(std::move(callback));
   }
-
-  ~ThreadPublisher() {}
-
-  void Register(std::function<void(const std::shared_ptr<const T>&)> cb){
-    callbacks.push_back(cb);
-  }
-
-  void Start(){
-    publish_thread = std::thread([this](){ Process(); });
-  }
-
-  void RequestShutdown(){
-    std::unique_lock<std::mutex> locker(shutdown_mutex);
-    shutdown_requested = true;
-    locker.unlock(); 
-  }
-
-  bool ShutdownRequested(){
-    bool is_requested;
-    std::unique_lock<std::mutex> locker(shutdown_mutex);
-    is_requested = shutdown_requested;
-    locker.unlock(); 
-    return is_requested;
-  }
-
-  void Publish(const std::shared_ptr<const T> msg){
-    std::unique_lock<std::mutex> locker(msg_mutex);
-    msgs.push(msg);
-    locker.unlock();
-    msg_cond.notify_one();
-  }
-
-  void Process(){
-    while(!ShutdownRequested()){
-      std::shared_ptr<const T> msg;
-      std::unique_lock<std::mutex> locker(msg_mutex);
-      while(msgs.empty()){
-        if(ShutdownRequested()){
-          locker.unlock();
-          break;
-        }else{
-          msg_cond.wait(locker);
-        }
-      }
-
-      if(ShutdownRequested()){
-        break;
-      }else{
-        if(0){
-          msg = msgs.back();
-          while(!msgs.empty()){
-            msgs.pop();
-          }
-        }else{
-          msg = msgs.front();
-          msgs.pop();
-        }
-      }
-      locker.unlock();
-      for(auto callback : callbacks){
-        callback(msg);
-      }
+  void Start() { thread_ = std::thread([this] { Process(); }); }
+  void RequestShutdown() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      shutdown_ = true;
     }
-    stopped = true;
+    condition_.notify_all();
   }
-
-  void ShutDown(){
-    // shutdown_requested = true;
-    // msg_cond.notify_one();
-    while(!stopped){
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      RequestShutdown();
-      msg_cond.notify_one();
+  bool ShutdownRequested() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return shutdown_;
+  }
+  void Publish(const std::shared_ptr<const T> message) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (shutdown_) return;
+      messages_.push(message);
     }
-
-    if(publish_thread.joinable()){
-      publish_thread.join();
+    condition_.notify_one();
+  }
+  void Process() {
+    for (;;) {
+      std::shared_ptr<const T> message;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        condition_.wait(lock, [this] { return shutdown_ || !messages_.empty(); });
+        if (messages_.empty()) break;
+        message = messages_.front();
+        messages_.pop();
+      }
+      for (const auto& callback : callbacks_) callback(message);
     }
   }
-
+  void ShutDown() {
+    RequestShutdown();
+    if (thread_.joinable()) thread_.join();
+  }
 private:
-  std::mutex msg_mutex;
-  std::mutex shutdown_mutex;
-  std::condition_variable msg_cond;
-  std::queue<std::shared_ptr<const T> > msgs;
-
-  std::thread publish_thread;
-  std::vector<std::function<void(const std::shared_ptr<const T>&)>> callbacks;
-
-  bool shutdown_requested;
-  bool stopped;
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  std::queue<std::shared_ptr<const T>> messages_;
+  std::thread thread_;
+  std::vector<std::function<void(const std::shared_ptr<const T>&)>> callbacks_;
+  bool shutdown_{false};
 };
-
-#endif  // THREAD_PUBLISHER_H_
+#endif

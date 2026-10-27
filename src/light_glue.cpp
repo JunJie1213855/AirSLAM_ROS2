@@ -27,7 +27,7 @@ bool SuperPointLightGlue::build() {
     return false;
   }
 
-  const auto explicit_batch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+  const auto explicit_batch = networkCreationFlags();
   auto network = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(explicit_batch));
   if (!network) {
     return false;
@@ -86,7 +86,7 @@ bool SuperPointLightGlue::build() {
     return false;
   }
 
-  engine_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(plan->data(), plan->size()));
+  engine_ = deserializeEngine(runtime.release(), plan->data(), plan->size());
   if (!engine_) {
     return false;
   }
@@ -112,7 +112,7 @@ bool SuperPointLightGlue::construct_network(TensorRTUniquePtr<nvinfer1::IBuilder
     return false;
   }
   //    config->setMaxWorkspaceSize(512);
-  config->setFlag(nvinfer1::BuilderFlag::kFP16);
+  configureModelPrecision(*config);
   enableDLA(builder.get(), config.get(), lightglue_config_.dla_core);
   return true;
 }
@@ -152,7 +152,7 @@ bool SuperPointLightGlue::infer(const Eigen::Matrix<float, 258, Eigen::Dynamic> 
 
   buffers.copyInputToDevice();
 
-  bool status = context_->executeV2(buffers.getDeviceBindings().data());
+  bool status = buffers.execute(*context_);
   if (!status) {
     return false;
   }
@@ -279,7 +279,7 @@ bool SuperPointLightGlue::process_output(const BufferManager &buffers, Eigen::Ma
 void SuperPointLightGlue::save_engine() {
   if (lightglue_config_.engine_file.empty()) return;
   if (engine_ != nullptr) {
-    nvinfer1::IHostMemory *data = engine_->serialize();
+    TensorRTUniquePtr<nvinfer1::IHostMemory> data{engine_->serialize()};
     std::ofstream file(lightglue_config_.engine_file, std::ios::binary);
     ;
     if (!file) return;
@@ -301,7 +301,7 @@ bool SuperPointLightGlue::deserialize_engine() {
       delete[] model_stream;
       return false;
     }
-    engine_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(model_stream, size));
+    engine_ = deserializeEngine(runtime, model_stream, size);
     if (engine_ == nullptr) {
       delete[] model_stream;
       return false;

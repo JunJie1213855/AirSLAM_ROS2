@@ -1,5 +1,7 @@
 plnet:
   use_superpoint: 1
+  use_mask_uniformity: true
+  min_distance: 15  # minimum spacing in original-image pixels
   max_keypoints: 400
   keypoint_threshold: 0.004
   remove_borders: 4 

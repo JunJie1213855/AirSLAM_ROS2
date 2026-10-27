@@ -9,6 +9,7 @@
 #include <Eigen/Core>
 
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
@@ -109,12 +110,15 @@ public:
   void PublishMapLine(MapLineMessagePtr mapline_message);
   void PubRelocResults(RelocMessagePtr reloc_message);
 
+  void SetReady(bool ready, int64_t stamp_ns = 0);
+
   void Clear();
   void ShutDown();
 
 private:
   rclcpp::Node::SharedPtr _node;
   RosPublisherConfig _config;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr _ready_pub;
 
   // for publishing features
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr _ros_feature_pub;

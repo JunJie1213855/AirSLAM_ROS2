@@ -215,36 +215,25 @@ void Preinteration::Repropagate(){
   }
 }
 
-void Preinteration::AddBatchData(const ImuDataList& batch_imu_data, double t0, double t1){
-  if(batch_imu_data.empty()) return;
-  start_time = start_time > 0 ? start_time : t0;
-  assert(std::abs(end_time-t0)<1e-5 || end_time < 0);
-  end_time = t1;
-  size_t i = 0;
-
-  Eigen::Vector3d mid_gyr, mid_acc;
-  double mid_t, dt;
-  for(; i < batch_imu_data.size()-1; i++){
-    if(batch_imu_data[i+1].timestamp < t0){
-      continue;
-    }else if(batch_imu_data[i].timestamp < t0){
-      mid_t = 0.5 * (t0 + batch_imu_data[i+1].timestamp);
-      dt = batch_imu_data[i+1].timestamp - t0;
-    }else if(batch_imu_data[i].timestamp > t1){
-      break;
-    }else if(batch_imu_data[i+1].timestamp > t1){
-      mid_t = 0.5 * (t1 + batch_imu_data[i].timestamp);
-      dt = t1 - batch_imu_data[i].timestamp;
-    }else{
-      mid_t = 0.5 * (batch_imu_data[i+1].timestamp + batch_imu_data[i].timestamp);
-      dt = batch_imu_data[i+1].timestamp - batch_imu_data[i].timestamp;
-    }
-    
-    mid_gyr = VectorInterpolation(batch_imu_data[i].gyr, batch_imu_data[i+1].gyr, batch_imu_data[i].timestamp, batch_imu_data[i+1].timestamp, mid_t);
-    mid_acc = VectorInterpolation(batch_imu_data[i].acc, batch_imu_data[i+1].acc, batch_imu_data[i].timestamp, batch_imu_data[i+1].timestamp, mid_t);
-
-    Propagate(dt, mid_acc, mid_gyr);
+void Preinteration::AddBatchData(const ImuDataList& batch_imu_data, double t0, double t1) {
+  if (batch_imu_data.size() < 2 || t1 <= t0) return;
+  // This object accumulates from a keyframe across multiple image callbacks.
+  // Clip overlapping IMU batches at the already integrated end time.
+  const double begin = end_time >= 0 ? std::max(t0, end_time) : t0;
+  if (t1 <= begin) return;
+  start_time = start_time >= 0 ? start_time : t0;
+  for (size_t i = 0; i + 1 < batch_imu_data.size(); ++i) {
+    const auto& left = batch_imu_data[i];
+    const auto& right = batch_imu_data[i + 1];
+    const double lower = std::max(begin, left.timestamp);
+    const double upper = std::min(t1, right.timestamp);
+    if (upper <= lower) continue;
+    const double mid = 0.5 * (lower + upper);
+    const auto gyro = VectorInterpolation(left.gyr, right.gyr, left.timestamp, right.timestamp, mid);
+    const auto accel = VectorInterpolation(left.acc, right.acc, left.timestamp, right.timestamp, mid);
+    Propagate(upper - lower, accel, gyro);
   }
+  end_time = t1;
 }
 
 const Eigen::Matrix3d Preinteration::GetDeltaRotation(const Eigen::Vector3d& gyr_bias){

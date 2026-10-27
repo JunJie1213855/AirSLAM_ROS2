@@ -59,6 +59,7 @@ public:
   Eigen::Matrix3d GetRwg();
   void SetIMUInit(bool imu_init);
   bool IMUInit();
+  bool ReadyToPublish() const;
 
   void SaveMap(const std::string& map_root);
 

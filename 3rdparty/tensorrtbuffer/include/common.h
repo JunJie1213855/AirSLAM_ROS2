@@ -29,6 +29,8 @@
 #endif
 
 #include "NvInfer.h"
+#include "trt_compat.h"
+#include <stdexcept>
 #include "NvInferPlugin.h"
 #include "logger.h"
 #include "sample_entrypoints.h"
@@ -103,7 +105,7 @@ OBJ_GUARD(T)
 makeObjGuard(T_* t)
 {
     CHECK(!(std::is_base_of<T, T_>::value || std::is_same<T, T_>::value));
-    auto deleter = [](T* t) { t->destroy(); };
+    auto deleter = [](T* t) { delete t; };
     return std::unique_ptr<T, decltype(deleter)>{static_cast<T*>(t), deleter};
 }
 
@@ -546,6 +548,7 @@ namespace tensorrt_buffer
 //
 // The default parameter values choosen arbitrarily. Range values should be choosen such that
 // we avoid underflow or overflow. Also range value should be non zero to avoid uniform zero scale tensor.
+#if NV_TENSORRT_MAJOR < 11
     inline void setAllDynamicRanges(nvinfer1::INetworkDefinition* network, float inRange = 2.0F, float outRange = 4.0F)
     {
         // Ensure that all layer inputs have a scale.
@@ -601,6 +604,8 @@ namespace tensorrt_buffer
         }
     }
 
+#endif
+
     inline void enableDLA(
             nvinfer1::IBuilder* builder, nvinfer1::IBuilderConfig* config, int useDLACore, bool allowGPUFallback = true)
     {
@@ -616,12 +621,16 @@ namespace tensorrt_buffer
             {
                 config->setFlag(nvinfer1::BuilderFlag::kGPU_FALLBACK);
             }
+#if NV_TENSORRT_MAJOR < 11
             if (!config->getFlag(nvinfer1::BuilderFlag::kINT8))
             {
                 // User has not requested INT8 Mode.
                 // By default run in FP16 mode. FP32 mode is not permitted.
                 config->setFlag(nvinfer1::BuilderFlag::kFP16);
             }
+#else
+            throw std::runtime_error("DLA requires an explicitly typed FP16/INT8 ONNX model in TensorRT 11");
+#endif
             config->setDefaultDeviceType(nvinfer1::DeviceType::kDLA);
             config->setDLACore(useDLACore);
         }
@@ -643,8 +652,10 @@ namespace tensorrt_buffer
     {
         switch (t)
         {
+            case nvinfer1::DataType::kINT64: return 8;
             case nvinfer1::DataType::kINT32: return 4;
             case nvinfer1::DataType::kFLOAT: return 4;
+            case nvinfer1::DataType::kBF16:
             case nvinfer1::DataType::kHALF: return 2;
             case nvinfer1::DataType::kBOOL:
             case nvinfer1::DataType::kUINT8:
@@ -1025,6 +1036,7 @@ namespace tensorrt_buffer
         return maxPersistentL2CacheSize;
     }
 
+#if NV_TENSORRT_MAJOR < 11
     inline bool isDataTypeSupported(nvinfer1::DataType dataType)
     {
         auto builder = TensorRTUniquePtr<nvinfer1::IBuilder>(createBuilder());
@@ -1041,6 +1053,8 @@ namespace tensorrt_buffer
 
         return true;
     }
+
+#endif
 
     class FileLock
     {

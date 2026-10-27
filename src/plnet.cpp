@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <opencv2/opencv.hpp>
+#include "feature_selection.h"
 #include <unordered_map>
 #include <utility>
 #include <chrono>
@@ -52,7 +53,7 @@ bool PLNet::build() {
   if (!builder_stage1) {
     return false;
   }
-  const auto explicit_batch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+  const auto explicit_batch = networkCreationFlags();
   auto network_stage1 = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder_stage1->createNetworkV2(explicit_batch));
   if (!network_stage1) {
     return false;
@@ -92,7 +93,7 @@ bool PLNet::build() {
   if (!runtime_stage1) {
     return false;
   }
-  engine0_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime_stage1->deserializeCudaEngine(plan_stage1->data(), plan_stage1->size()));
+  engine0_ = deserializeEngine(runtime_stage1.release(), plan_stage1->data(), plan_stage1->size());
   if (!engine0_) {
     return false;
   }
@@ -170,7 +171,7 @@ bool PLNet::build() {
   if (!runtime_stage2) {
     return false;
   }
-  engine1_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime_stage2->deserializeCudaEngine(plan_stage2->data(), plan_stage2->size()));
+  engine1_ = deserializeEngine(runtime_stage2.release(), plan_stage2->data(), plan_stage2->size());
   if (!engine1_) {
     return false;
   }
@@ -213,7 +214,7 @@ bool PLNet::construct_network_stage2(TensorRTUniquePtr<nvinfer1::IBuilder> &buil
   if (!parsed) {
     return false;
   }
-  config->setFlag(nvinfer1::BuilderFlag::kFP16);
+  configureModelPrecision(*config);
   enableDLA(builder.get(), config.get(), -1);
   return true;
 }
@@ -230,7 +231,7 @@ bool PLNet::infer(const cv::Mat &image, Eigen::Matrix<float, 259, Eigen::Dynamic
   }
   buffers0.copyInputToDevice();
 
-  bool status = context0_->executeV2(buffers0.getDeviceBindings().data());
+  bool status = buffers0.execute(*context0_);
   if (!status) {
     return false;
   }
@@ -306,52 +307,18 @@ bool PLNet::wireframe_matcher(const float* iskeep, const float* idx_junc_to_end_
   return true;
 }
 
-void PLNet::detect_point(const float* heat_map, Eigen::Matrix<float, 259, Eigen::Dynamic>& features, 
+void PLNet::detect_point(
+    const float* heat_map, Eigen::Matrix<float, 259, Eigen::Dynamic>& features,
     int h, int w, float threshold, int border, int top_k) {
-  std::vector<float> scores_v;
-  std::vector<float> kpt_xs, kpt_ys;
-
-  scores_v.reserve(top_k);
-  kpt_xs.reserve(top_k);
-  kpt_ys.reserve(top_k);
-
-  int heat_map_size = w * h;
-
-  int min_x = border;
-  int min_y = border;
-  int max_x = w - border;
-  int max_y = h - border;
-
-  for(int i = 0; i < heat_map_size; ++i){
-    float score = *(heat_map+i);
-    if(score < threshold) continue;
-
-    int y = int(i / w);
-    int x = i - y * w;
-
-    if(x < min_x || x > max_x || y < min_y || y > max_y) continue;
-
-    scores_v.emplace_back(*(heat_map+i));
-    kpt_xs.emplace_back(float(x));
-    kpt_ys.emplace_back(float(y));
+  const auto selected = SelectHeatmapPoints(
+      heat_map, h, w, threshold, border, top_k,
+      plnet_config_.use_mask_uniformity, plnet_config_.min_distance, w_scale, h_scale);
+  features.resize(259, selected.size());
+  for (size_t i = 0; i < selected.size(); ++i) {
+    features(0, i) = selected[i].score;
+    features(1, i) = selected[i].x;
+    features(2, i) = selected[i].y;
   }
-
-
-  if(scores_v.size() > top_k){
-    std::vector<size_t> indexes = sort_indexes(scores_v);
-    features.resize(259, top_k);
-    for(int i = 0; i < top_k; ++i){
-      features(0, i) = scores_v[indexes[i]];
-      features(1, i) = kpt_xs[indexes[i]];
-      features(2, i) = kpt_ys[indexes[i]];
-    }
-  }else{
-    features.resize(259, scores_v.size());
-    features.row(0) = Eigen::Map<Eigen::Matrix<float, 1, Eigen::Dynamic>>(scores_v.data(), 1, scores_v.size());
-    features.row(1) = Eigen::Map<Eigen::Matrix<float, 1, Eigen::Dynamic>>(kpt_xs.data(), 1, kpt_xs.size());
-    features.row(2) = Eigen::Map<Eigen::Matrix<float, 1, Eigen::Dynamic>>(kpt_ys.data(), 1, kpt_ys.size());
-  }
-
 }
 
 std::vector<size_t> PLNet::sort_indexes(std::vector<float> &data) {
@@ -507,7 +474,7 @@ bool PLNet::process_output(const BufferManager &buffers, Eigen::Matrix<float, 25
   }
 
   buffers1.copyInputToDevice();
-  bool status = context1_->executeV2(buffers1.getDeviceBindings().data());
+  bool status = buffers1.execute(*context1_);
   if (!status) {
     return false;
   }
@@ -586,13 +553,13 @@ bool PLNet::process_output(const BufferManager &buffers, Eigen::Matrix<float, 25
 
 void PLNet::save_engine() {
   if (engine0_ != nullptr) {
-    nvinfer1::IHostMemory *data = engine0_->serialize();
+    TensorRTUniquePtr<nvinfer1::IHostMemory> data{engine0_->serialize()};
     std::ofstream file(plnet_config_.plnet_s0_engine, std::ios::binary);
     if (!file) return;
     file.write(reinterpret_cast<const char *>(data->data()), data->size());
   }
   if (engine1_ != nullptr) {
-    nvinfer1::IHostMemory *data = engine1_->serialize();
+    TensorRTUniquePtr<nvinfer1::IHostMemory> data{engine1_->serialize()};
     std::ofstream file(plnet_config_.plnet_s1_engine, std::ios::binary);
     if (!file) return;
     file.write(reinterpret_cast<const char *>(data->data()), data->size());
@@ -615,7 +582,7 @@ bool PLNet::deserialize_engine() {
     if (runtime == nullptr) {
       delete[] model_stream;
     }
-    engine0_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(model_stream, size));
+    engine0_ = deserializeEngine(runtime, model_stream, size);
     if (engine0_ == nullptr) {
       delete[] model_stream;
     }
@@ -633,7 +600,7 @@ bool PLNet::deserialize_engine() {
     if (runtime == nullptr) {
       delete[] model_stream;
     }
-    engine1_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(model_stream, size));
+    engine1_ = deserializeEngine(runtime, model_stream, size);
     if (engine1_ == nullptr) {
       delete[] model_stream;
     }

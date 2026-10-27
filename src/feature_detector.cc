@@ -7,6 +7,8 @@
 FeatureDetector::FeatureDetector(const PLNetConfig& plnet_config) : _plnet_config(plnet_config){
   if(_plnet_config.use_superpoint){
     SuperPointConfig superpoint_config;
+    superpoint_config.use_mask_uniformity = plnet_config.use_mask_uniformity;
+    superpoint_config.min_distance = plnet_config.min_distance;
     superpoint_config.max_keypoints = plnet_config.max_keypoints;
     superpoint_config.keypoint_threshold = plnet_config.keypoint_threshold;
     superpoint_config.remove_borders = plnet_config.remove_borders;

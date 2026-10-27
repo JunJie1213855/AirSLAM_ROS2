@@ -2,6 +2,7 @@
 #define MAP_BUILDER_H_
 
 #include <iostream>
+#include <atomic>
 #include <chrono>
 #include <opencv2/opencv.hpp>
 #include <Eigen/Core>
@@ -97,12 +98,13 @@ private:
   std::thread _tracking_thread;
 
   std::mutex _stop_mutex;
-  bool _shutdown;
-  bool _feature_thread_stop;
-  bool _tracking_trhead_stop;
+  std::atomic<bool> _shutdown;
+  std::atomic<bool> _feature_thread_stop;
+  std::atomic<bool> _tracking_trhead_stop;
 
   // tmp 
   bool _init;
+  bool _output_started = false;
   bool _insert_next_keyframe;
   int _track_id;
   int _line_track_id;

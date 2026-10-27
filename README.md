@@ -1,3 +1,10 @@
+> **当前工作区（2026-10-27）**：已迁移至 TensorRT **11.3.0.99**、CUDA Toolkit **12.1** 和 ROS 2 Humble。
+> 构建、EuRoC 回放、在线双目/IMU 输入与 S2M2/点云 BA 的当前操作说明，
+> 见 [组合工作区说明](../airslam_recon_bringup/docs/BUILD_AND_RUN.md)。
+> 下方 TensorRT 10.9 / CUDA 13.0 内容是原迁移记录，不应作为本工作区的安装步骤。
+> 新增在线程序：stereo_inertial_node；结束并保存：/airslam/finish。
+> 当前 TensorRT 11 基线保留 ONNX 图精度，不再使用已移除的自动 FP16 builder flag。
+
 <h1 align="center">AirSLAM: An Efficient and Illumination-Robust Point-Line Visual SLAM System</h1>
 
 <p align="center"><strong>

@@ -107,12 +107,16 @@ public:
                   const nvinfer1::IExecutionContext* context = nullptr)
             : mEngine(engine), mBatchSize(batchSize)
     {
-        assert(engine->hasImplicitBatchDimension() || mBatchSize == 0);
+        assert(mBatchSize == 0);
         for (int32_t i = 0; i < mEngine->getNbIOTensors(); i++)
         {
             auto const* tensorName = mEngine->getIOTensorName(i);
             auto dims = context ? context->getTensorShape(tensorName) : mEngine->getTensorShape(tensorName);
-            size_t vol = context || !mBatchSize ? 1 : static_cast<size_t>(mBatchSize);
+            if (dims.nbDims < 0 || std::any_of(dims.d, dims.d + dims.nbDims,
+                    [](int64_t dim) { return dim < 0; })) {
+                throw std::runtime_error(std::string("Unresolved tensor shape: ") + tensorName);
+            }
+            size_t vol = 1;
             nvinfer1::DataType type = mEngine->getTensorDataType(tensorName);
             int32_t vecDim = mEngine->getTensorVectorizedDim(tensorName);
             if (-1 != vecDim) {
@@ -128,6 +132,15 @@ public:
             mManagedBuffers.emplace_back(std::move(manBuf));
             mTensorNameToIndex[std::string(tensorName)] = i;
         }
+    }
+
+    bool execute(nvinfer1::IExecutionContext& context) const {
+        for (int32_t i = 0; i < mEngine->getNbIOTensors(); ++i) {
+            if (!context.setTensorAddress(mEngine->getIOTensorName(i), mDeviceBindings[i])) return false;
+        }
+        auto stream = makeCudaStream();
+        if (!stream || !context.enqueueV3(*stream)) return false;
+        return cudaStreamSynchronize(*stream) == cudaSuccess;
     }
 
     std::vector<void*>& getDeviceBindings() { return mDeviceBindings; }

@@ -5,6 +5,7 @@
 #include <utility>
 #include <unordered_map>
 #include <opencv2/opencv.hpp>
+#include "feature_selection.h"
 
 using namespace tensorrt_log;
 using namespace tensorrt_buffer;
@@ -22,7 +23,7 @@ bool SuperPoint::build() {
     std::cout << "SuperPoint: building from " << super_point_config_.onnx_file << std::endl;
     auto builder = TensorRTUniquePtr<nvinfer1::IBuilder>(nvinfer1::createInferBuilder(gLogger.getTRTLogger()));
     if (!builder) { std::cerr << "SP: createInferBuilder failed" << std::endl; return false; }
-    const auto explicit_batch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+    const auto explicit_batch = networkCreationFlags();
     auto network = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(explicit_batch));
     if (!network) {
         return false;
@@ -64,7 +65,7 @@ bool SuperPoint::build() {
     if (!runtime) {
         return false;
     }
-    engine_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(plan->data(), plan->size()));
+    engine_ = deserializeEngine(runtime.release(), plan->data(), plan->size());
     if (!engine_) {
         return false;
     }
@@ -90,7 +91,7 @@ bool SuperPoint::construct_network(TensorRTUniquePtr<nvinfer1::IBuilder> &builde
         return false;
     }
     // config->setMaxWorkspaceSize(512_MiB);
-    config->setFlag(nvinfer1::BuilderFlag::kFP16);
+    configureModelPrecision(*config);
     enableDLA(builder.get(), config.get(), super_point_config_.dla_core);
     return true;
 }
@@ -125,7 +126,7 @@ bool SuperPoint::infer(const cv::Mat &image_, Eigen::Matrix<float, 259, Eigen::D
 
     buffers.copyInputToDevice();
 
-    bool status = context_->executeV2(buffers.getDeviceBindings().data());
+    bool status = buffers.execute(*context_);
     if (!status) {
         return false;
     }
@@ -166,48 +167,17 @@ std::vector<size_t> SuperPoint::sort_indexes(std::vector<float> &data) {
   return indexes;
 }
 
-void SuperPoint::detect_point(const float* heat_map, Eigen::Matrix<float, 259, Eigen::Dynamic>& features, 
+void SuperPoint::detect_point(
+    const float* heat_map, Eigen::Matrix<float, 259, Eigen::Dynamic>& features,
     int h, int w, float threshold, int border, int top_k) {
-  std::vector<float> scores_v;
-  std::vector<float> kpt_xs, kpt_ys;
-
-  scores_v.reserve(top_k);
-  kpt_xs.reserve(top_k);
-  kpt_ys.reserve(top_k);
-
-  int heat_map_size = w * h;
-
-  int min_x = border;
-  int min_y = border;
-  int max_x = w - border;
-  int max_y = h - border;
-
-  for(int i = 0; i < heat_map_size; ++i){
-    if(*(heat_map+i) < threshold) continue;
-
-    int y = int(i / w);
-    int x = i - y * w;
-
-    if(x < min_x || x > max_x || y < min_y || y > max_y) continue;
-
-    scores_v.emplace_back(*(heat_map+i));
-    kpt_xs.emplace_back(float(x));
-    kpt_ys.emplace_back(float(y));
-  }
-
-  if(scores_v.size() > top_k){
-    std::vector<size_t> indexes = sort_indexes(scores_v);
-    features.resize(259, top_k);
-    for (int i = 0; i < top_k; ++i) {
-      features(0, i) = scores_v[indexes[i]];
-      features(1, i) = kpt_xs[indexes[i]];
-      features(2, i) = kpt_ys[indexes[i]];
-    }
-  }else{
-    features.resize(259, scores_v.size());
-    features.row(0) = Eigen::Map<Eigen::Matrix<float, 1, Eigen::Dynamic>>(scores_v.data(), 1, scores_v.size());
-    features.row(1) = Eigen::Map<Eigen::Matrix<float, 1, Eigen::Dynamic>>(kpt_xs.data(), 1, kpt_xs.size());
-    features.row(2) = Eigen::Map<Eigen::Matrix<float, 1, Eigen::Dynamic>>(kpt_ys.data(), 1, kpt_ys.size());
+  const auto selected = SelectHeatmapPoints(
+      heat_map, h, w, threshold, border, top_k,
+      super_point_config_.use_mask_uniformity, super_point_config_.min_distance, w_scale, h_scale);
+  features.resize(259, selected.size());
+  for (size_t i = 0; i < selected.size(); ++i) {
+    features(0, i) = selected[i].score;
+    features(1, i) = selected[i].x;
+    features(2, i) = selected[i].y;
   }
 }
 
@@ -290,7 +260,7 @@ bool SuperPoint::process_output(const BufferManager &buffers, Eigen::Matrix<floa
 void SuperPoint::save_engine() {
     if (super_point_config_.engine_file.empty()) return;
     if (engine_ != nullptr) {
-        nvinfer1::IHostMemory *data = engine_->serialize();
+        TensorRTUniquePtr<nvinfer1::IHostMemory> data{engine_->serialize()};
         std::ofstream file(super_point_config_.engine_file, std::ios::binary);
         if (!file) return;
         file.write(reinterpret_cast<const char *>(data->data()), data->size());
@@ -312,7 +282,7 @@ bool SuperPoint::deserialize_engine() {
             delete[] model_stream;
             return false;
         }
-        engine_ = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(model_stream, size));
+        engine_ = deserializeEngine(runtime, model_stream, size);
         delete[] model_stream;
         if (engine_ == nullptr) return false;
         return true;
