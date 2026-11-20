@@ -7,7 +7,6 @@
 #include <condition_variable>
 #include <vector>
 #include <queue>
-#include <boost/bind.hpp>
 #include <functional>
 
 template <class T>
@@ -24,7 +23,7 @@ public:
   }
 
   void Start(){
-    publish_thread = std::thread(boost::bind(&ThreadPublisher::Process, this));
+    publish_thread = std::thread([this](){ Process(); });
   }
 
   void Publish(const std::shared_ptr<const T> msg){

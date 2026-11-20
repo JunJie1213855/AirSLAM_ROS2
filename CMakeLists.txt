@@ -1,55 +1,47 @@
 cmake_minimum_required(VERSION 3.5)
 project(air_vo)
 
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_BUILD_TYPE "release")
+set(CMAKE_CXX_STANDARD 17)
+
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
-add_definitions(-w)
+add_compile_options(-w)
 
-add_subdirectory(${PROJECT_SOURCE_DIR}/Thirdparty/TensorRTBuffer)
+# TensorRT 10.9.0.34 (same stack as AirSLAM_ROS2).
+# Override for local builds: -DTENSORRT_DIR=$HOME/lib/TensorRT-<version>
+set(TENSORRT_DIR "$ENV{HOME}/lib/Deploy/TensorRT-10.9.0.34" CACHE PATH "TensorRT root directory")
+set(TENSORRT_INCLUDE_DIRS ${TENSORRT_DIR}/include)
+set(TENSORRT_LIB_DIRS ${TENSORRT_DIR}/lib)
 
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  cv_bridge
-  geometry_msgs
-  image_transport
-  nav_msgs
-  roscpp
-  rospy
-  std_msgs
-  sensor_msgs
-)
+add_subdirectory(${PROJECT_SOURCE_DIR}/3rdparty/tensorrtbuffer)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(message_filters REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 find_package(OpenCV 4.2 REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(CUDA REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(Boost REQUIRED)
-find_package(G2O REQUIRED)
+find_package(Boost REQUIRED COMPONENTS serialization)
+find_package(g2o REQUIRED)
 find_package(Gflags REQUIRED)
 find_package(Glog REQUIRED)
 
-catkin_package(
- INCLUDE_DIRS include
- LIBRARIES ${PROJECT_NAME}_lib
- CATKIN_DEPENDS geometry_msgs image_transport nav_msgs roscpp rospy std_msgs
-)
+# CUDA 13.0: find_package does not always set library paths
+link_directories(${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDA_TOOLKIT_ROOT_DIR}/lib)
 
-include_directories(
-  ${PROJECT_SOURCE_DIR}
-  ${PROJECT_SOURCE_DIR}/include
-  ${OpenCV_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIRS}
-  ${CUDA_INCLUDE_DIRS}
-  ${YAML_CPP_INCLUDE_DIR}
-  ${Boost_INCLUDE_DIRS}
-  ${catkin_INCLUDE_DIRS}
-  ${G2O_INCLUDE_DIR}
-  ${GFLAGS_INCLUDE_DIRS} 
-  ${GLOG_INCLUDE_DIRS}
-)
+find_library(TENSORRT_LIBRARY_INFER nvinfer HINTS ${TENSORRT_LIB_DIRS} REQUIRED)
+find_library(TENSORRT_LIBRARY_ONNX nvonnxparser HINTS ${TENSORRT_LIB_DIRS} REQUIRED)
 
 add_library(${PROJECT_NAME}_lib SHARED
   src/g2o_optimization/vertex_line3d.cc
@@ -72,21 +64,83 @@ add_library(${PROJECT_NAME}_lib SHARED
   src/timer.cc
 )
 
-target_link_libraries(${PROJECT_NAME}_lib
-  nvinfer
-  nvonnxparser
-  ${OpenCV_LIBRARIES}
-  ${CUDA_LIBRARIES}
-  ${Boost_LIBRARIES}
-  ${G2O_LIBRARIES}
-  ${GFLAGS_LIBRARIES} 
-  ${GLOG_LIBRARIES}
-  yaml-cpp
-  TensorRTBuffer
+target_include_directories(${PROJECT_NAME}_lib
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>
+    ${OpenCV_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIRS}
+    ${CUDA_INCLUDE_DIRS}
+    ${TENSORRT_INCLUDE_DIRS}
+    ${YAML_CPP_INCLUDE_DIR}
+    ${Boost_INCLUDE_DIRS}
+    ${GFLAGS_INCLUDE_DIRS}
+    ${GLOG_INCLUDE_DIRS}
 )
 
-add_executable(${PROJECT_NAME} main.cpp)
-target_link_libraries(${PROJECT_NAME} ${PROJECT_NAME}_lib ${catkin_LIBRARIES})
+ament_target_dependencies(${PROJECT_NAME}_lib
+  PUBLIC
+  rclcpp cv_bridge message_filters geometry_msgs nav_msgs
+  sensor_msgs std_msgs visualization_msgs
+)
 
-add_executable(${PROJECT_NAME}_ros ros_main.cpp)
-target_link_libraries(${PROJECT_NAME}_ros ${PROJECT_NAME}_lib ${catkin_LIBRARIES})
+target_link_libraries(${PROJECT_NAME}_lib
+  PUBLIC
+    g2o::core g2o::types_slam3d g2o::types_sba g2o::types_slam3d_addons g2o::solver_eigen
+  PRIVATE
+    ${TENSORRT_LIBRARY_INFER}
+    ${TENSORRT_LIBRARY_ONNX}
+    ${CUDA_LIBRARIES}
+    cudart
+    tensorrtbuffer
+  PUBLIC
+    ${OpenCV_LIBRARIES}
+    ${Boost_LIBRARIES}
+    ${Boost_SERIALIZATION_LIBRARY}
+    ${GFLAGS_LIBRARIES}
+    ${GLOG_LIBRARIES}
+    yaml-cpp
+)
+
+ament_export_include_directories(include)
+ament_export_dependencies(
+  rclcpp
+  cv_bridge
+  message_filters
+  geometry_msgs
+  nav_msgs
+  sensor_msgs
+  std_msgs
+  visualization_msgs
+)
+
+add_executable(air_vo demo/visual_odometry.cpp)
+target_link_libraries(air_vo ${PROJECT_NAME}_lib)
+
+add_executable(air_vo_ros demo/visual_odometry_ros.cpp)
+target_link_libraries(air_vo_ros ${PROJECT_NAME}_lib)
+
+add_executable(test_feature demo/test_feature.cpp)
+target_link_libraries(test_feature ${PROJECT_NAME}_lib)
+
+install(TARGETS ${PROJECT_NAME}_lib tensorrtbuffer
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(TARGETS air_vo air_vo_ros test_feature
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY include/
+  DESTINATION include/${PROJECT_NAME}
+)
+
+install(DIRECTORY configs/ DESTINATION share/${PROJECT_NAME}/configs)
+install(DIRECTORY rviz/ DESTINATION share/${PROJECT_NAME}/rviz)
+install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+install(DIRECTORY output/ DESTINATION share/${PROJECT_NAME}/output)
+
+ament_package()

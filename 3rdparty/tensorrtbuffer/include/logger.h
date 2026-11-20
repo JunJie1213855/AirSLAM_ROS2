@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,9 +21,9 @@
 #include "logging.h"
 
 class TensorRTErrorRecorder;
-
 extern TensorRTErrorRecorder gRecorder;
-namespace tensorrt_log {
+namespace tensorrt_log
+{
     extern Logger gLogger;
     extern LogStreamConsumer gLogVerbose;
     extern LogStreamConsumer gLogInfo;
@@ -31,6 +32,6 @@ namespace tensorrt_log {
     extern LogStreamConsumer gLogFatal;
 
     void setReportableSeverity(Logger::Severity severity);
-} // namespace tensorrt_log
+} // namespace sample
 
 #endif // LOGGER_H

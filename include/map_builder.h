@@ -37,7 +37,7 @@ typedef std::shared_ptr<TrackingData> TrackingDataPtr;
 
 class MapBuilder{
 public:
-  MapBuilder(Configs& configs);
+  MapBuilder(Configs& configs, rclcpp::Node::SharedPtr node);
   void AddInput(InputDataPtr data);
   void ExtractFeatureThread();
   void TrackingThread();

@@ -12,7 +12,7 @@ def MakeDir(nd):
 
 dataroot = "/media/data/datasets/oivio/selected_seq"
 saving_root = "/media/code/ubuntu_files/airvo/experiments/vo_results/iros/oivio/"
-workspace = "/media/code/ubuntu_files/airvo/catkin_ws"
+workspace = "/media/code/ubuntu_files/airvo/ros2_ws"  # source install/setup.bash before running
 traj_gt_dir = "/media/code/ubuntu_files/airvo/experiments/traj_gt/oivio"
 
 MakeDir(saving_root)
@@ -33,8 +33,8 @@ for sequence in sequences:
   if os.path.exists(seq_traj_path):
     continue
 
-  # os.system("cd {} & roslaunch air_vo uma_bumblebee_indoor.launch dataroot:={} traj_path:={}".format(workspace, seq_dataroot, seq_traj_path))
-  os.system("cd {} & roslaunch air_vo oivio.launch dataroot:={} traj_path:={}".format(workspace, seq_dataroot, seq_traj_path))
+  # os.system("cd {} && ros2 launch air_vo uma_bumblebee_indoor.launch.py dataroot:={} traj_path:={}".format(workspace, seq_dataroot, seq_traj_path))
+  os.system("cd {} && ros2 launch air_vo oivio.launch.py dataroot:={} traj_path:={}".format(workspace, seq_dataroot, seq_traj_path))
 
   gt_path = os.path.join(traj_gt_dir, seq_traj_file)
   if not os.path.exists(gt_path):

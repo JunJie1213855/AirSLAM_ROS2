@@ -9,7 +9,7 @@
 #include <fstream>
 #include <opencv2/opencv.hpp>
 
-using namespace tensorrt_common;
+using namespace nvinfer1;
 using namespace tensorrt_log;
 using namespace tensorrt_buffer;
 
@@ -28,8 +28,13 @@ bool SuperGlue::build() {
         return false;
     }
 
+    // TensorRT 10/11: explicit batch is always enabled. kEXPLICIT_BATCH was removed in TRT 11.
+#if NV_TENSORRT_MAJOR >= 11
+    auto network = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(0U));
+#else
     const auto explicit_batch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
     auto network = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(explicit_batch));
+#endif
     if (!network) {
         return false;
     }
@@ -128,8 +133,10 @@ bool SuperGlue::construct_network(TensorRTUniquePtr<nvinfer1::IBuilder> &builder
     if (!parsed) {
         return false;
     }
-    config->setMaxWorkspaceSize(512_MiB);
+    // TensorRT 10.x: setMaxWorkspaceSize was removed (workspace is sized automatically).
+#if NV_TENSORRT_MAJOR < 11
     config->setFlag(BuilderFlag::kFP16);
+#endif
     enableDLA(builder.get(), config.get(), superglue_config_.dla_core);
     return true;
 }
@@ -148,30 +155,30 @@ bool SuperGlue::infer(const Eigen::Matrix<double, 259, Eigen::Dynamic> &features
     }
     }
 
-    assert(engine_->getNbBindings() == 7);
+    assert(engine_->getNbIOTensors() == 7);
 
-    const int keypoints_0_index = engine_->getBindingIndex(superglue_config_.input_tensor_names[0].c_str());
-    const int scores_0_index = engine_->getBindingIndex(superglue_config_.input_tensor_names[1].c_str());
-    const int descriptors_0_index = engine_->getBindingIndex(superglue_config_.input_tensor_names[2].c_str());
-    const int keypoints_1_index = engine_->getBindingIndex(superglue_config_.input_tensor_names[3].c_str());
-    const int scores_1_index = engine_->getBindingIndex(superglue_config_.input_tensor_names[4].c_str());
-    const int descriptors_1_index = engine_->getBindingIndex(superglue_config_.input_tensor_names[5].c_str());
-    const int output_score_index = engine_->getBindingIndex(superglue_config_.output_tensor_names[0].c_str());
+    const char *keypoints_0_name = superglue_config_.input_tensor_names[0].c_str();
+    const char *scores_0_name = superglue_config_.input_tensor_names[1].c_str();
+    const char *descriptors_0_name = superglue_config_.input_tensor_names[2].c_str();
+    const char *keypoints_1_name = superglue_config_.input_tensor_names[3].c_str();
+    const char *scores_1_name = superglue_config_.input_tensor_names[4].c_str();
+    const char *descriptors_1_name = superglue_config_.input_tensor_names[5].c_str();
+    const char *output_score_name = superglue_config_.output_tensor_names[0].c_str();
 
-    context_->setBindingDimensions(keypoints_0_index, Dims3(1, features0.cols(), 2));
-    context_->setBindingDimensions(scores_0_index, Dims2(1, features0.cols()));
-    context_->setBindingDimensions(descriptors_0_index, Dims3(1, 256, features0.cols()));
-    context_->setBindingDimensions(keypoints_1_index, Dims3(1, features1.cols(), 2));
-    context_->setBindingDimensions(scores_1_index, Dims2(1, features1.cols()));
-    context_->setBindingDimensions(descriptors_1_index, Dims3(1, 256, features1.cols()));
+    context_->setInputShape(keypoints_0_name, Dims3(1, features0.cols(), 2));
+    context_->setInputShape(scores_0_name, Dims2(1, features0.cols()));
+    context_->setInputShape(descriptors_0_name, Dims3(1, 256, features0.cols()));
+    context_->setInputShape(keypoints_1_name, Dims3(1, features1.cols(), 2));
+    context_->setInputShape(scores_1_name, Dims2(1, features1.cols()));
+    context_->setInputShape(descriptors_1_name, Dims3(1, 256, features1.cols()));
 
-    keypoints_0_dims_ = context_->getBindingDimensions(keypoints_0_index);
-    scores_0_dims_ = context_->getBindingDimensions(scores_0_index);
-    descriptors_0_dims_ = context_->getBindingDimensions(descriptors_0_index);
-    keypoints_1_dims_ = context_->getBindingDimensions(keypoints_1_index);
-    scores_1_dims_ = context_->getBindingDimensions(scores_1_index);
-    descriptors_1_dims_ = context_->getBindingDimensions(descriptors_1_index);
-    output_scores_dims_ = context_->getBindingDimensions(output_score_index);
+    keypoints_0_dims_ = context_->getTensorShape(keypoints_0_name);
+    scores_0_dims_ = context_->getTensorShape(scores_0_name);
+    descriptors_0_dims_ = context_->getTensorShape(descriptors_0_name);
+    keypoints_1_dims_ = context_->getTensorShape(keypoints_1_name);
+    scores_1_dims_ = context_->getTensorShape(scores_1_name);
+    descriptors_1_dims_ = context_->getTensorShape(descriptors_1_name);
+    output_scores_dims_ = context_->getTensorShape(output_score_name);
 
     BufferManager buffers(engine_, 0, context_.get());
 

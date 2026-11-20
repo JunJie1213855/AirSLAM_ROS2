@@ -13,3 +13,7 @@ weights/*
 debug/*
 *.so
 */__pycache__/*
+install/
+log/
+__pycache__/
+*.pyc

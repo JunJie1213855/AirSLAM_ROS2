@@ -12,10 +12,10 @@
 #include <NvOnnxParser.h>
 #include <opencv2/opencv.hpp>
 
-#include "Thirdparty/TensorRTBuffer/include/buffers.h"
+#include "3rdparty/tensorrtbuffer/include/buffers.h"
 #include "read_configs.h"
 
-using tensorrt_common::TensorRTUniquePtr;
+using tensorrt_buffer::TensorRTUniquePtr;
 
 class SuperPoint {
 public:

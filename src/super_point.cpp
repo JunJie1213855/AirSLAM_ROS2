@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <opencv2/opencv.hpp>
 
-using namespace tensorrt_common;
+using namespace nvinfer1;
 using namespace tensorrt_log;
 using namespace tensorrt_buffer;
 
@@ -24,8 +24,13 @@ bool SuperPoint::build() {
     if (!builder) {
         return false;
     }
+    // TensorRT 10/11: explicit batch is always enabled. kEXPLICIT_BATCH was removed in TRT 11.
+#if NV_TENSORRT_MAJOR >= 11
+    auto network = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(0U));
+#else
     const auto explicit_batch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
     auto network = TensorRTUniquePtr<nvinfer1::INetworkDefinition>(builder->createNetworkV2(explicit_batch));
+#endif
     if (!network) {
         return false;
     }
@@ -93,8 +98,10 @@ bool SuperPoint::construct_network(TensorRTUniquePtr<nvinfer1::IBuilder> &builde
     if (!parsed) {
         return false;
     }
-    config->setMaxWorkspaceSize(512_MiB);
+    // TensorRT 10.x: setMaxWorkspaceSize was removed (workspace is sized automatically).
+#if NV_TENSORRT_MAJOR < 11
     config->setFlag(BuilderFlag::kFP16);
+#endif
     enableDLA(builder.get(), config.get(), super_point_config_.dla_core);
     return true;
 }
@@ -108,11 +115,10 @@ bool SuperPoint::infer(const cv::Mat &image, Eigen::Matrix<double, 259, Eigen::D
         }
     }
     
-    assert(engine_->getNbBindings() == 3);
+    assert(engine_->getNbIOTensors() == 3);
 
-    const int input_index = engine_->getBindingIndex(super_point_config_.input_tensor_names[0].c_str());
-
-    context_->setBindingDimensions(input_index, Dims4(1, 1, image.rows, image.cols));
+    const char *input_name = super_point_config_.input_tensor_names[0].c_str();
+    context_->setInputShape(input_name, Dims4(1, 1, image.rows, image.cols));
 
     BufferManager buffers(engine_, 0, context_.get());
     

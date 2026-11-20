@@ -18,7 +18,7 @@
 #include "timer.h"
 #include "debug.h"
 
-MapBuilder::MapBuilder(Configs& configs): _shutdown(false), _init(false), _track_id(0), _line_track_id(0), 
+MapBuilder::MapBuilder(Configs& configs, rclcpp::Node::SharedPtr node): _shutdown(false), _init(false), _track_id(0), _line_track_id(0),
     _to_update_local_map(false), _configs(configs){
   _camera = std::shared_ptr<Camera>(new Camera(configs.camera_config_path));
   _superpoint = std::shared_ptr<SuperPoint>(new SuperPoint(configs.superpoint_config));
@@ -28,11 +28,11 @@ MapBuilder::MapBuilder(Configs& configs): _shutdown(false), _init(false), _track
   }
   _point_matching = std::shared_ptr<PointMatching>(new PointMatching(configs.superglue_config));
   _line_detector = std::shared_ptr<LineDetector>(new LineDetector(configs.line_detector_config));
-  _ros_publisher = std::shared_ptr<RosPublisher>(new RosPublisher(configs.ros_publisher_config));
+  _ros_publisher = std::shared_ptr<RosPublisher>(new RosPublisher(configs.ros_publisher_config, node));
   _map = std::shared_ptr<Map>(new Map(_configs.backend_optimization_config, _camera, _ros_publisher));
 
-  _feature_thread = std::thread(boost::bind(&MapBuilder::ExtractFeatureThread, this));
-  _tracking_thread = std::thread(boost::bind(&MapBuilder::TrackingThread, this));
+  _feature_thread = std::thread([this](){ ExtractFeatureThread(); });
+  _tracking_thread = std::thread([this](){ TrackingThread(); });
 }
 
 void MapBuilder::AddInput(InputDataPtr data){
@@ -671,4 +671,7 @@ void MapBuilder::ShutDown(){
   _shutdown = true;
   _feature_thread.join();
   _tracking_thread.join();
+  if(_ros_publisher){
+    _ros_publisher->ShutDown();
+  }
 }
